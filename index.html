@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="tr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>İYUK Dilekçe Kontrol</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="intro">
+        <div>
+          <p class="eyebrow">İdari dava dilekçesi ön inceleme kontrolü</p>
+          <h1>İdari dava dilekçelerinin kabulü</h1>
+        </div>
+        <div class="status-card">
+          <span class="status-dot"></span>
+          <strong>Prototip sürüm</strong>
+          <p>Bu ekran kontrol mantığını ve ürün akışını denemek için hazırlandı.</p>
+        </div>
+      </section>
+
+      <section class="workspace">
+        <div class="panel input-panel">
+          <div class="panel-header">
+            <div>
+              <h2>Dilekçe Girişi</h2>
+              <p>Metni yapıştırın veya okunabilir bir metin dosyası yükleyin.</p>
+            </div>
+          </div>
+
+          <label class="field">
+            <span>Dava türü</span>
+            <select id="caseType">
+              <option value="tam-yargi">Tam yargı davası</option>
+              <option value="iptal">İptal davası</option>
+              <option value="iptal-tam-yargi">İptal + tam yargı davası</option>
+              <option value="yd">Yürütmenin durdurulması talepli dava</option>
+            </select>
+          </label>
+
+          <label class="upload-zone" for="petitionFile">
+            <input id="petitionFile" type="file" accept=".txt,.pdf,.doc,.docx" />
+            <span class="upload-icon">+</span>
+            <strong>Dosya seç</strong>
+            <small id="fileStatus">PDF, DOCX veya TXT dosyasını yükleyin.</small>
+          </label>
+
+          <label class="field">
+            <span>Dilekçe metni</span>
+            <textarea
+              id="petitionText"
+              placeholder="Dilekçe metnini buraya yapıştırın..."
+            ></textarea>
+          </label>
+
+          <div class="actions">
+            <button id="analyzeBtn" class="primary">Kontrol et</button>
+            <button id="clearBtn" class="secondary">Temizle</button>
+          </div>
+        </div>
+
+        <div class="panel results-panel">
+          <div class="panel-header">
+            <div>
+              <h2>Kontrol Raporu</h2>
+              <p id="summaryText">Henüz analiz yapılmadı.</p>
+            </div>
+            <span id="verdictBadge" class="badge neutral">Bekliyor</span>
+          </div>
+
+          <div class="score-row">
+            <div>
+              <span class="score-label">Uygunluk</span>
+              <strong id="scoreValue">0%</strong>
+            </div>
+            <progress id="scoreBar" value="0" max="100"></progress>
+          </div>
+
+          <div id="checklist" class="checklist empty">
+            Dilekçe kontrolü burada listelenecek.
+          </div>
+        </div>
+      </section>
+
+      <section class="panel draft-panel">
+        <div class="panel-header">
+          <div>
+            <h2>Uygun Hale Getirilmiş Taslak</h2>
+            <p>Eksik gerçek bilgiler köşeli parantezle işaretlenir; uydurulmaz.</p>
+          </div>
+          <div class="actions compact">
+            <button id="buildDraftBtn" class="secondary">Taslak oluştur</button>
+            <button id="downloadTxtBtn" class="secondary">Metin indir</button>
+            <button id="printBtn" class="secondary">PDF yazdır</button>
+          </div>
+        </div>
+        <pre id="draftOutput" class="draft-output">Analizden sonra taslak burada görünecek.</pre>
+      </section>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>
