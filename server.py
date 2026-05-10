@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -17,6 +18,7 @@ from pypdf import PdfReader
 ROOT = Path(__file__).resolve().parent
 HOST = "127.0.0.1"
 PORT = 8765
+ANALYSIS_CACHE: dict[str, dict] = {}
 
 
 class PetitionHandler(SimpleHTTPRequestHandler):
@@ -63,7 +65,11 @@ class PetitionHandler(SimpleHTTPRequestHandler):
                 self.send_json({"error": "Dilekçe metni boş."}, status=400)
                 return
 
-            analysis = analyze_with_openai(petition_text)
+            cache_key = build_analysis_cache_key(petition_text)
+            analysis = ANALYSIS_CACHE.get(cache_key)
+            if analysis is None:
+                analysis = analyze_with_openai(petition_text)
+                ANALYSIS_CACHE[cache_key] = analysis
             self.send_json({"analysis": analysis})
         except MissingOpenAIKeyError as exc:
             self.send_json({"error": str(exc)}, status=503)
@@ -110,7 +116,8 @@ def analyze_with_openai(petition_text: str) -> dict:
         )
 
     model = os.environ.get("OPENAI_MODEL", "gpt-5.4-mini")
-    prompt = build_legal_prompt(petition_text)
+    evidence = extract_local_evidence(petition_text)
+    prompt = build_legal_prompt(petition_text, evidence)
     body = {
         "model": model,
         "input": prompt,
@@ -137,10 +144,11 @@ def analyze_with_openai(petition_text: str) -> dict:
                                     "id": {"type": "string"},
                                     "title": {"type": "string"},
                                     "status": {"type": "string", "enum": ["uygun", "riskli", "eksik", "düzeltilmeli"]},
+                                    "evidence": {"type": "string"},
                                     "explanation": {"type": "string"},
                                     "recommendation": {"type": "string"},
                                 },
-                                "required": ["id", "title", "status", "explanation", "recommendation"],
+                                "required": ["id", "title", "status", "evidence", "explanation", "recommendation"],
                             },
                         },
                         "missingInformation": {
@@ -180,7 +188,7 @@ def analyze_with_openai(petition_text: str) -> dict:
     return json.loads(output_text)
 
 
-def build_legal_prompt(petition_text: str) -> str:
+def build_legal_prompt(petition_text: str, evidence: dict) -> str:
     return f"""
 Sen idari yargılama usulü alanında çalışan, İYUK m.3 ve idari dava dilekçelerinin ön inceleme şartları bakımından uzmanlaşmış bir dilekçe kontrol motorusun.
 
@@ -194,7 +202,15 @@ Görev:
 - Eksik gerçek bilgileri uydurma. Eksik bilgi gereken yerlere köşeli parantezli açıklama koy.
 - Düzeltilebilen anlatım, başlık, konu, sonuç ve istem bölümlerini uygun dilekçe formuna getir.
 - Yürütmenin durdurulması talepli olduğu sonucuna varırsan ilgili ibareyi büyük harfli ve belirgin şekilde taslağa ekle.
+- Her kontrol maddesinde kararını dilekçedeki somut metin parçasına bağla.
+- Bir unsur için “uygun” diyebilmen için dilekçede o unsuru açıkça gösteren bir metin parçası bulunmalıdır.
+- Metinde açık karşılığı yoksa “eksik” veya “riskli” de; tahminle uygun deme.
+- Aynı dilekçe aynı kanıtlarla değerlendirildiğinde aynı sonuca varacak şekilde tutarlı davran.
+- Aşağıdaki yerel kanıt çıkarımını yardımcı veri olarak kullan; ancak nihai kararı dilekçenin tamamına göre ver.
 - Cevabı yalnızca istenen JSON şemasına uygun ver.
+
+Yerel kanıt çıkarımı:
+{json.dumps(evidence, ensure_ascii=False, indent=2)}
 
 Dilekçe metni:
 {petition_text}
@@ -215,6 +231,51 @@ def extract_response_text(data: dict) -> str:
         return "\n".join(chunks)
 
     raise ValueError("OpenAI yanıtında metin bulunamadı.")
+
+
+def build_analysis_cache_key(petition_text: str) -> str:
+    normalized = re.sub(r"\s+", " ", petition_text).strip().lower()
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def extract_local_evidence(petition_text: str) -> dict:
+    text = re.sub(r"\s+", " ", petition_text).strip()
+    return {
+        "mahkemeye_hitap": find_excerpt(text, r"(danıştay|idare mahkemesi|vergi mahkemesi).{0,90}başkanlığı'?na"),
+        "davacı": find_labeled_excerpt(text, "davacı"),
+        "davacı_adresi_olabilir": find_excerpt(text, r"(adres|mahallesi|mah\.|sokak|cadde|cad\.|no\s*:|/\s*[A-ZÇĞİÖŞÜa-zçğıöşü]+)"),
+        "davali": find_labeled_excerpt(text, "davalı"),
+        "konu": find_labeled_excerpt(text, "konu"),
+        "teblig_ogrenme_tarihi": find_excerpt(text, r"(tebellüğ|tebliğ|öğrenme|bildirim).{0,80}\d{1,2}[./]\d{1,2}[./]\d{4}"),
+        "tazminat_miktari": find_excerpt(text, r"\d[\d.,]*\s*(tl|₺|türk lirası)"),
+        "yd_ibaresi": find_excerpt(text, r"YÜRÜTMENİN\s+DURDURULMASI\s+TALEPLİDİR|yürütmenin\s+durdurulması"),
+        "sonuc_istem": find_excerpt(text, r"(sonuç|netice).{0,20}(talep|istem)"),
+        "ekler_deliller": find_excerpt(text, r"(ekler|deliller|ek\s*:)"),
+        "imza_tarih": find_excerpt(text[-900:], r"\d{1,2}[./]\d{1,2}[./]\d{4}.{0,180}(davacı|vekili|av\.)"),
+    }
+
+
+def find_excerpt(text: str, pattern: str) -> str:
+    match = re.search(pattern, text, flags=re.IGNORECASE)
+    if not match:
+        return ""
+    start = max(0, match.start() - 60)
+    end = min(len(text), match.end() + 100)
+    return text[start:end].strip()
+
+
+def find_labeled_excerpt(text: str, label: str) -> str:
+    match = re.search(rf"{label}\s*:", text, flags=re.IGNORECASE)
+    if not match:
+        return ""
+    start = match.start()
+    next_label = re.search(
+        r"\b(vekili|davalı|konu|tebellüğ|tebliğ|açıklamalar|hukuki sebepler|sonuç)\s*:",
+        text[match.end() :],
+        flags=re.IGNORECASE,
+    )
+    end = match.end() + next_label.start() if next_label else min(len(text), start + 450)
+    return text[start:end].strip()
 
 
 def parse_multipart_file(content_type: str, body: bytes) -> tuple[str, bytes]:

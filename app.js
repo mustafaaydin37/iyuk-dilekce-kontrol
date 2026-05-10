@@ -358,6 +358,7 @@ function buildAiReport(ai) {
     .map((item, index) => {
       return `${index + 1}. ${item.title}
 Durum: ${item.status}
+Dayanak: ${item.evidence || "-"}
 Değerlendirme: ${item.explanation}
 Öneri: ${item.recommendation || "-"}`;
     })
