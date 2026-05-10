@@ -74,7 +74,7 @@ OPENAI_MODEL=gpt-5.4-mini
 
 - Dilekçe metni yapıştırma
 - PDF/DOCX/TXT dosya yükleme ve metin çıkarımı
-- Dava türü seçimi
+- Dava türünü otomatik tespit etme
 - İYUK m.3 kontrol listesi
 - Eksik unsur bildirimi
 - Uygun hale getirilmiş taslak üretimi

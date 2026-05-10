@@ -1,9 +1,7 @@
-const caseTypeEl = document.querySelector("#caseType");
 const fileEl = document.querySelector("#petitionFile");
 const fileStatusEl = document.querySelector("#fileStatus");
 const textEl = document.querySelector("#petitionText");
 const analyzeBtn = document.querySelector("#analyzeBtn");
-const aiAnalyzeBtn = document.querySelector("#aiAnalyzeBtn");
 const clearBtn = document.querySelector("#clearBtn");
 const checklistEl = document.querySelector("#checklist");
 const summaryTextEl = document.querySelector("#summaryText");
@@ -18,6 +16,7 @@ const printBtn = document.querySelector("#printBtn");
 let lastAnalysis = null;
 
 const caseTypeLabels = {
+  auto: "Sistem tarafından belirlenecek",
   "tam-yargi": "Tam yargı davası",
   iptal: "İptal davası",
   "iptal-tam-yargi": "İptal + tam yargı davası",
@@ -176,41 +175,34 @@ fileEl.addEventListener("change", async () => {
     }
     textEl.value = result.text;
     fileStatusEl.textContent = `${file.name} yüklendi.`;
-    draftOutputEl.textContent = "Dosya metni dilekçe alanına aktarıldı. Kontrol et düğmesiyle analizi başlatabilirsiniz.";
+    draftOutputEl.textContent = "Dosya metni dilekçe alanına aktarıldı. Dilekçeyi analiz et düğmesiyle analizi başlatabilirsiniz.";
   } catch (error) {
     fileStatusEl.textContent = `${file.name} okunamadı.`;
     draftOutputEl.textContent = `Dosya yükleme hatası: ${error.message}`;
   }
 });
 
-analyzeBtn.addEventListener("click", () => {
-  lastAnalysis = analyzePetition(textEl.value, caseTypeEl.value);
-  renderAnalysis(lastAnalysis);
-  draftOutputEl.textContent = "Analiz tamamlandı. Taslak oluştur düğmesiyle düzenlenmiş metni üretebilirsiniz.";
-});
-
-aiAnalyzeBtn.addEventListener("click", async () => {
+analyzeBtn.addEventListener("click", async () => {
   const petitionText = textEl.value.trim();
   if (!petitionText) {
-    draftOutputEl.textContent = "OpenAI analizi için önce dilekçe metni girilmeli veya dosya yüklenmelidir.";
+    draftOutputEl.textContent = "Analiz için önce dilekçe metni girilmeli veya dosya yüklenmelidir.";
     return;
   }
 
   if (!location.origin.startsWith("http")) {
-    draftOutputEl.textContent = "OpenAI analizi için sayfayı yerel sunucu veya Render adresi üzerinden açın.";
+    draftOutputEl.textContent = "Analiz için sayfayı yerel sunucu veya Render adresi üzerinden açın.";
     return;
   }
 
-  aiAnalyzeBtn.disabled = true;
-  aiAnalyzeBtn.textContent = "Analiz ediliyor...";
-  summaryTextEl.textContent = "OpenAI destekli ayrıntılı kontrol yapılıyor.";
+  analyzeBtn.disabled = true;
+  analyzeBtn.textContent = "Analiz ediliyor...";
+  summaryTextEl.textContent = "Dilekçe türü belirleniyor ve ayrıntılı ön inceleme kontrolü yapılıyor.";
 
   try {
     const response = await fetch("/ai-analyze", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        caseType: caseTypeEl.value,
         text: petitionText,
       }),
     });
@@ -223,11 +215,11 @@ aiAnalyzeBtn.addEventListener("click", async () => {
     renderAnalysis(lastAnalysis);
     draftOutputEl.textContent = buildAiReport(result.analysis);
   } catch (error) {
-    summaryTextEl.textContent = "OpenAI analizi çalıştırılamadı.";
-    draftOutputEl.textContent = `OpenAI analizi hatası: ${error.message}`;
+    summaryTextEl.textContent = "Analiz çalıştırılamadı.";
+    draftOutputEl.textContent = `Analiz hatası: ${error.message}`;
   } finally {
-    aiAnalyzeBtn.disabled = false;
-    aiAnalyzeBtn.textContent = "OpenAI ile derin analiz";
+    analyzeBtn.disabled = false;
+    analyzeBtn.textContent = "Dilekçeyi analiz et";
   }
 });
 
@@ -248,7 +240,7 @@ clearBtn.addEventListener("click", () => {
 
 buildDraftBtn.addEventListener("click", () => {
   if (!lastAnalysis) {
-    lastAnalysis = analyzePetition(textEl.value, caseTypeEl.value);
+    lastAnalysis = analyzePetition(textEl.value, "auto");
     renderAnalysis(lastAnalysis);
   }
   draftOutputEl.textContent = buildDraft(textEl.value, lastAnalysis);
@@ -351,8 +343,8 @@ function mapAiAnalysis(ai) {
   const badge = verdict === "Geçer" ? "good" : verdict === "Geçmez" ? "bad" : "warn";
 
   return {
-    caseType: caseTypeEl.value,
-    caseTypeLabel: caseTypeLabels[caseTypeEl.value],
+    caseType: ai.detectedCaseType || "auto",
+    caseTypeLabel: ai.detectedCaseType || caseTypeLabels.auto,
     score,
     verdict,
     badge,
@@ -379,6 +371,8 @@ Değerlendirme: ${item.explanation}
 
 Sonuç: ${ai.verdict || "Riskli"}
 Uygunluk puanı: ${ai.score ?? "-"}%
+Tespit edilen dava türü: ${ai.detectedCaseType || "-"}
+Tespit gerekçesi: ${ai.detectedCaseTypeReason || "-"}
 
 Kısa değerlendirme:
 ${ai.summary || "-"}

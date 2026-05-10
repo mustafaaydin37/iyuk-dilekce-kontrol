@@ -59,12 +59,11 @@ class PetitionHandler(SimpleHTTPRequestHandler):
             length = int(self.headers.get("Content-Length", "0"))
             payload = json.loads(self.rfile.read(length).decode("utf-8"))
             petition_text = str(payload.get("text", "")).strip()
-            case_type = str(payload.get("caseType", "")).strip()
             if not petition_text:
                 self.send_json({"error": "Dilekçe metni boş."}, status=400)
                 return
 
-            analysis = analyze_with_openai(case_type, petition_text)
+            analysis = analyze_with_openai(petition_text)
             self.send_json({"analysis": analysis})
         except MissingOpenAIKeyError as exc:
             self.send_json({"error": str(exc)}, status=503)
@@ -103,7 +102,7 @@ class MissingOpenAIKeyError(RuntimeError):
     pass
 
 
-def analyze_with_openai(case_type: str, petition_text: str) -> dict:
+def analyze_with_openai(petition_text: str) -> dict:
     api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
         raise MissingOpenAIKeyError(
@@ -111,7 +110,7 @@ def analyze_with_openai(case_type: str, petition_text: str) -> dict:
         )
 
     model = os.environ.get("OPENAI_MODEL", "gpt-5.4-mini")
-    prompt = build_legal_prompt(case_type, petition_text)
+    prompt = build_legal_prompt(petition_text)
     body = {
         "model": model,
         "input": prompt,
@@ -126,6 +125,8 @@ def analyze_with_openai(case_type: str, petition_text: str) -> dict:
                     "properties": {
                         "verdict": {"type": "string", "enum": ["Geçer", "Riskli", "Geçmez"]},
                         "score": {"type": "integer", "minimum": 0, "maximum": 100},
+                        "detectedCaseType": {"type": "string"},
+                        "detectedCaseTypeReason": {"type": "string"},
                         "summary": {"type": "string"},
                         "checklist": {
                             "type": "array",
@@ -151,6 +152,8 @@ def analyze_with_openai(case_type: str, petition_text: str) -> dict:
                     "required": [
                         "verdict",
                         "score",
+                        "detectedCaseType",
+                        "detectedCaseTypeReason",
                         "summary",
                         "checklist",
                         "missingInformation",
@@ -177,27 +180,21 @@ def analyze_with_openai(case_type: str, petition_text: str) -> dict:
     return json.loads(output_text)
 
 
-def build_legal_prompt(case_type: str, petition_text: str) -> str:
-    case_label = {
-        "tam-yargi": "Tam yargı davası",
-        "iptal": "İptal davası",
-        "iptal-tam-yargi": "İptal + tam yargı davası",
-        "yd": "Yürütmenin durdurulması talepli dava",
-    }.get(case_type, case_type)
-
+def build_legal_prompt(petition_text: str) -> str:
     return f"""
 Sen idari yargılama usulü alanında çalışan, İYUK m.3 ve idari dava dilekçelerinin ön inceleme şartları bakımından uzmanlaşmış bir dilekçe kontrol motorusun.
 
 Görev:
-- Aşağıdaki dilekçeyi dava türüne göre incele.
+- Kullanıcı dava türünü bilmek zorunda değildir. Önce dilekçenin türünü içerikten kendin belirle: iptal davası, tam yargı davası, iptal + tam yargı davası, yürütmenin durdurulması talepli dava veya belirsiz/karma.
+- Tespit ettiğin dava türünü ve gerekçesini yaz.
 - İYUK m.3 kapsamındaki unsurları tek tek değerlendir.
 - Görev, yetki, süre, ehliyet, husumet, dava konusu işlem, kesin/yürütülebilir işlem, tebliğ/öğrenme tarihi, sonuç ve istem, deliller, ekler, imza/tarih ve dava türüne özgü biçimsel unsurlar bakımından riskleri yaz.
+- Dilekçede yürütmenin durdurulması isteniyor veya olayın niteliği YD talebini gerektiriyor gibi görünüyorsa, “YÜRÜTMENİN DURDURULMASI TALEPLİDİR” ibaresinin bulunup bulunmadığını özellikle kontrol et.
+- Kullanıcı iptal davası gibi görünen bir dilekçe sunmuş ama YD talebine ilişkin olgular/istemler var ve ibare eksikse bunu açıkça eksik/riskli unsur olarak işaretle.
 - Eksik gerçek bilgileri uydurma. Eksik bilgi gereken yerlere köşeli parantezli açıklama koy.
 - Düzeltilebilen anlatım, başlık, konu, sonuç ve istem bölümlerini uygun dilekçe formuna getir.
-- Yürütmenin durdurulması talepli davada ilgili ibareyi büyük harfli ve belirgin şekilde taslağa ekle.
+- Yürütmenin durdurulması talepli olduğu sonucuna varırsan ilgili ibareyi büyük harfli ve belirgin şekilde taslağa ekle.
 - Cevabı yalnızca istenen JSON şemasına uygun ver.
-
-Dava türü: {case_label}
 
 Dilekçe metni:
 {petition_text}
