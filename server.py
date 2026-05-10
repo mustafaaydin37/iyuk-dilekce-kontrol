@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import argparse
+import copy
+import hashlib
 import json
 import os
 import re
+import threading
 import urllib.error
 import urllib.request
 from html import escape
@@ -18,6 +21,9 @@ from pypdf import PdfReader
 ROOT = Path(__file__).resolve().parent
 HOST = "127.0.0.1"
 PORT = 8765
+ANALYSIS_CACHE: dict[str, dict] = {}
+ANALYSIS_CACHE_LOCK = threading.Lock()
+ANALYSIS_CACHE_MAX_ITEMS = 200
 CANONICAL_CHECKS = [
     ("mahkeme", "Mahkemeye hitap"),
     ("dava_turu", "Dava türü ve istemin belirginliği"),
@@ -90,13 +96,13 @@ class PetitionHandler(SimpleHTTPRequestHandler):
                 self.send_json({"error": "Dilekçe metni boş."}, status=400)
                 return
 
-            analysis = analyze_with_openai(petition_text)
-            self.send_json({"analysis": analysis})
+            analysis, cached = analyze_petition_cached(petition_text)
+            self.send_json({"analysis": analysis, "cached": cached})
         except MissingOpenAIKeyError as exc:
             self.send_json({"error": str(exc)}, status=503)
         except urllib.error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="replace")
-            self.send_json({"error": f"OpenAI API hatası: {detail}"}, status=502)
+            error_payload, status = parse_openai_http_error(exc)
+            self.send_json(error_payload, status=status)
         except Exception as exc:
             self.send_json({"error": f"OpenAI analizi çalıştırılamadı: {exc}"}, status=500)
 
@@ -156,6 +162,79 @@ def extract_text(filename: str, data: bytes) -> str:
         return data.decode("utf-8", errors="replace")
 
     raise ValueError("Yalnızca PDF, DOCX ve TXT dosyaları desteklenir.")
+
+
+def analyze_petition_cached(petition_text: str) -> tuple[dict, bool]:
+    cache_key = build_analysis_cache_key(petition_text)
+    with ANALYSIS_CACHE_LOCK:
+        cached = ANALYSIS_CACHE.get(cache_key)
+        if cached:
+            return copy.deepcopy(cached), True
+
+    analysis = analyze_with_openai(petition_text)
+    with ANALYSIS_CACHE_LOCK:
+        if len(ANALYSIS_CACHE) >= ANALYSIS_CACHE_MAX_ITEMS:
+            oldest_key = next(iter(ANALYSIS_CACHE))
+            ANALYSIS_CACHE.pop(oldest_key, None)
+        ANALYSIS_CACHE[cache_key] = copy.deepcopy(analysis)
+    return analysis, False
+
+
+def build_analysis_cache_key(petition_text: str) -> str:
+    model = os.environ.get("OPENAI_MODEL", "gpt-5.4-mini")
+    normalized_text = re.sub(r"\s+", " ", petition_text).strip()
+    digest = hashlib.sha256(normalized_text.encode("utf-8")).hexdigest()
+    return f"{model}:{digest}"
+
+
+def parse_openai_http_error(exc: urllib.error.HTTPError) -> tuple[dict, int]:
+    detail = exc.read().decode("utf-8", errors="replace")
+    retry_after = exc.headers.get("Retry-After")
+    parsed = {}
+    try:
+        parsed = json.loads(detail)
+    except json.JSONDecodeError:
+        parsed = {}
+
+    error = parsed.get("error", {}) if isinstance(parsed, dict) else {}
+    message = str(error.get("message") or detail or "OpenAI API hatası.")
+    code = str(error.get("code") or "")
+    error_type = str(error.get("type") or "")
+
+    if exc.code == 429 or code == "rate_limit_exceeded" or "rate limit" in message.lower():
+        wait_hint = retry_after or extract_retry_hint(message)
+        suffix = f" Tahmini bekleme süresi: {wait_hint}." if wait_hint else " Bir süre sonra tekrar deneyin."
+        return (
+            {
+                "error": "OpenAI kullanım limiti dolduğu için analiz şu anda tamamlanamadı."
+                + suffix,
+                "code": "rate_limit_exceeded",
+                "retryAfter": wait_hint,
+            },
+            429,
+        )
+
+    if exc.code in {401, 403}:
+        return (
+            {
+                "error": "OpenAI API anahtarı veya yetkisiyle ilgili bir sorun var. Render Environment ayarları kontrol edilmeli.",
+                "code": "openai_auth_error",
+            },
+            503,
+        )
+
+    return (
+        {
+            "error": "OpenAI analizi şu anda tamamlanamadı. Bir süre sonra tekrar deneyin.",
+            "code": code or error_type or "openai_api_error",
+        },
+        502,
+    )
+
+
+def extract_retry_hint(message: str) -> str:
+    match = re.search(r"try again in\s+([0-9a-zA-ZğüşöçıİĞÜŞÖÇ.\s]+?)(?:\.|$)", message, flags=re.IGNORECASE)
+    return match.group(1).strip() if match else ""
 
 
 def build_docx_export(payload: dict) -> bytes:

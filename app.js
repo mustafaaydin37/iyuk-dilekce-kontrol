@@ -220,7 +220,10 @@ analyzeBtn.addEventListener("click", async () => {
     });
     const result = await response.json();
     if (!response.ok) {
-      throw new Error(result.error || "OpenAI analizi tamamlanamadı.");
+      const error = new Error(result.error || "OpenAI analizi tamamlanamadı.");
+      error.code = result.code || "";
+      error.retryAfter = result.retryAfter || "";
+      throw error;
     }
 
     lastAnalysis = mapAiAnalysis(result.analysis);
@@ -230,13 +233,48 @@ analyzeBtn.addEventListener("click", async () => {
     analysisOutputEl.textContent = buildAiReport(result.analysis);
     draftOutputEl.textContent = result.analysis.revisedPetition || "Taslak üretilemedi.";
   } catch (error) {
-    summaryTextEl.textContent = "Analiz çalıştırılamadı.";
-    analysisOutputEl.textContent = `Analiz hatası: ${error.message}`;
+    renderAnalysisFailure(error);
   } finally {
     analyzeBtn.disabled = false;
     analyzeBtn.textContent = "Dilekçeyi analiz et";
   }
 });
+
+function renderAnalysisFailure(error) {
+  const isRateLimit = error.code === "rate_limit_exceeded";
+  summaryTextEl.textContent = isRateLimit ? "Analiz limiti dolduğu için işlem tamamlanamadı." : "Analiz çalıştırılamadı.";
+  verdictBadgeEl.textContent = "Yapılamadı";
+  verdictBadgeEl.className = "badge bad";
+  scoreValueEl.textContent = "-";
+  scoreBarEl.value = 0;
+  caseTypeValueEl.textContent = "-";
+  criticalValueEl.textContent = "-";
+  fixableValueEl.textContent = "-";
+  renderList(missingInfoListEl, ["Analiz tamamlanamadığı için eksik bilgi kontrolü yapılamadı."]);
+  renderList(fixableListEl, ["Analiz tamamlanamadığı için düzeltilebilir nokta listesi üretilemedi."]);
+  renderList(attachmentListEl, ["Analiz tamamlanamadığı için ek/dosya kontrolü yapılamadı."]);
+  checklistEl.className = "checklist empty";
+  checklistEl.textContent = "Analiz tamamlanamadığı için kontrol listesi oluşturulamadı.";
+  detailTableEl.className = "detail-table empty-table";
+  detailTableEl.textContent = "Analiz tamamlanamadığı için tablo oluşturulamadı.";
+  draftOutputEl.textContent = "Analiz tamamlanamadığı için düzeltilmiş taslak üretilemedi.";
+
+  if (isRateLimit) {
+    resultNoticeEl.textContent =
+      error.retryAfter
+        ? `OpenAI kullanım limiti doldu. Tahmini bekleme süresi: ${error.retryAfter}. Bu süre dolduktan sonra aynı dilekçeyi tekrar analiz edebilirsiniz.`
+        : "OpenAI kullanım limiti doldu. Bir süre sonra aynı dilekçeyi tekrar analiz edebilirsiniz.";
+    resultNoticeEl.className = "result-notice warn";
+    analysisOutputEl.textContent =
+      `Analiz yapılamadı: ${error.message}\n\n` +
+      "Bu durum dilekçenin eksik veya hatalı olduğu anlamına gelmez; yalnızca analiz servisi geçici olarak limit nedeniyle yanıt verememiştir.";
+    return;
+  }
+
+  resultNoticeEl.textContent = "Analiz servisi şu anda yanıt veremedi. Lütfen bir süre sonra tekrar deneyin.";
+  resultNoticeEl.className = "result-notice bad";
+  analysisOutputEl.textContent = `Analiz hatası: ${error.message}`;
+}
 
 clearBtn.addEventListener("click", () => {
   textEl.value = "";
