@@ -3,6 +3,7 @@ const fileEl = document.querySelector("#petitionFile");
 const fileStatusEl = document.querySelector("#fileStatus");
 const textEl = document.querySelector("#petitionText");
 const analyzeBtn = document.querySelector("#analyzeBtn");
+const aiAnalyzeBtn = document.querySelector("#aiAnalyzeBtn");
 const clearBtn = document.querySelector("#clearBtn");
 const checklistEl = document.querySelector("#checklist");
 const summaryTextEl = document.querySelector("#summaryText");
@@ -188,6 +189,48 @@ analyzeBtn.addEventListener("click", () => {
   draftOutputEl.textContent = "Analiz tamamlandı. Taslak oluştur düğmesiyle düzenlenmiş metni üretebilirsiniz.";
 });
 
+aiAnalyzeBtn.addEventListener("click", async () => {
+  const petitionText = textEl.value.trim();
+  if (!petitionText) {
+    draftOutputEl.textContent = "OpenAI analizi için önce dilekçe metni girilmeli veya dosya yüklenmelidir.";
+    return;
+  }
+
+  if (!location.origin.startsWith("http")) {
+    draftOutputEl.textContent = "OpenAI analizi için sayfayı yerel sunucu veya Render adresi üzerinden açın.";
+    return;
+  }
+
+  aiAnalyzeBtn.disabled = true;
+  aiAnalyzeBtn.textContent = "Analiz ediliyor...";
+  summaryTextEl.textContent = "OpenAI destekli ayrıntılı kontrol yapılıyor.";
+
+  try {
+    const response = await fetch("/ai-analyze", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        caseType: caseTypeEl.value,
+        text: petitionText,
+      }),
+    });
+    const result = await response.json();
+    if (!response.ok) {
+      throw new Error(result.error || "OpenAI analizi tamamlanamadı.");
+    }
+
+    lastAnalysis = mapAiAnalysis(result.analysis);
+    renderAnalysis(lastAnalysis);
+    draftOutputEl.textContent = buildAiReport(result.analysis);
+  } catch (error) {
+    summaryTextEl.textContent = "OpenAI analizi çalıştırılamadı.";
+    draftOutputEl.textContent = `OpenAI analizi hatası: ${error.message}`;
+  } finally {
+    aiAnalyzeBtn.disabled = false;
+    aiAnalyzeBtn.textContent = "OpenAI ile derin analiz";
+  }
+});
+
 clearBtn.addEventListener("click", () => {
   textEl.value = "";
   fileEl.value = "";
@@ -286,6 +329,69 @@ function renderAnalysis(analysis) {
     `;
     checklistEl.appendChild(row);
   });
+}
+
+function mapAiAnalysis(ai) {
+  const items = (ai.checklist || []).map((item) => ({
+    id: item.id || item.title,
+    title: item.title || "Kontrol unsuru",
+    weight: 1,
+    status: item.status === "uygun" ? "ok" : "missing",
+    message: item.explanation || item.recommendation || "Değerlendirme bulunamadı.",
+  }));
+
+  const missingCount = items.filter((item) => item.status !== "ok").length;
+  const score = Number.isFinite(ai.score) ? ai.score : Math.max(0, Math.round(((items.length - missingCount) / Math.max(items.length, 1)) * 100));
+  const verdictMap = {
+    "geçer": "Geçer",
+    "riskli": "Riskli",
+    "geçmez": "Geçmez",
+  };
+  const verdict = verdictMap[String(ai.verdict || "").toLowerCase()] || "Riskli";
+  const badge = verdict === "Geçer" ? "good" : verdict === "Geçmez" ? "bad" : "warn";
+
+  return {
+    caseType: caseTypeEl.value,
+    caseTypeLabel: caseTypeLabels[caseTypeEl.value],
+    score,
+    verdict,
+    badge,
+    items,
+    missingCount,
+  };
+}
+
+function buildAiReport(ai) {
+  const checklist = (ai.checklist || [])
+    .map((item, index) => {
+      return `${index + 1}. ${item.title}
+Durum: ${item.status}
+Değerlendirme: ${item.explanation}
+Öneri: ${item.recommendation || "-"}`;
+    })
+    .join("\n\n");
+
+  const missingInfo = (ai.missingInformation || [])
+    .map((item, index) => `${index + 1}. ${item}`)
+    .join("\n");
+
+  return `OPENAI DESTEKLİ ÖN İNCELEME RAPORU
+
+Sonuç: ${ai.verdict || "Riskli"}
+Uygunluk puanı: ${ai.score ?? "-"}%
+
+Kısa değerlendirme:
+${ai.summary || "-"}
+
+İYUK m.3 ve ön inceleme kontrolü:
+${checklist || "-"}
+
+Eksik gerçek bilgiler:
+${missingInfo || "-"}
+
+Uygun hale getirilmiş dilekçe taslağı:
+${ai.revisedPetition || "[Taslak üretilemedi.]"}
+`;
 }
 
 function buildDraft(rawText, analysis) {

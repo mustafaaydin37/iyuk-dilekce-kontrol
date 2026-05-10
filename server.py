@@ -4,6 +4,8 @@ import argparse
 import json
 import os
 import re
+import urllib.error
+import urllib.request
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from io import BytesIO
 from pathlib import Path
@@ -22,6 +24,10 @@ class PetitionHandler(SimpleHTTPRequestHandler):
         super().__init__(*args, directory=str(ROOT), **kwargs)
 
     def do_POST(self):
+        if self.path == "/ai-analyze":
+            self.handle_ai_analyze()
+            return
+
         if self.path != "/extract":
             self.send_error(404, "Not found")
             return
@@ -48,6 +54,26 @@ class PetitionHandler(SimpleHTTPRequestHandler):
         except Exception as exc:
             self.send_json({"error": f"Dosya işlenemedi: {exc}"}, status=500)
 
+    def handle_ai_analyze(self):
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            payload = json.loads(self.rfile.read(length).decode("utf-8"))
+            petition_text = str(payload.get("text", "")).strip()
+            case_type = str(payload.get("caseType", "")).strip()
+            if not petition_text:
+                self.send_json({"error": "Dilekçe metni boş."}, status=400)
+                return
+
+            analysis = analyze_with_openai(case_type, petition_text)
+            self.send_json({"analysis": analysis})
+        except MissingOpenAIKeyError as exc:
+            self.send_json({"error": str(exc)}, status=503)
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            self.send_json({"error": f"OpenAI API hatası: {detail}"}, status=502)
+        except Exception as exc:
+            self.send_json({"error": f"OpenAI analizi çalıştırılamadı: {exc}"}, status=500)
+
     def send_json(self, payload, status=200):
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
@@ -72,6 +98,126 @@ def extract_text(filename: str, data: bytes) -> str:
         return data.decode("utf-8", errors="replace")
 
     raise ValueError("Yalnızca PDF, DOCX ve TXT dosyaları desteklenir.")
+
+class MissingOpenAIKeyError(RuntimeError):
+    pass
+
+
+def analyze_with_openai(case_type: str, petition_text: str) -> dict:
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        raise MissingOpenAIKeyError(
+            "OPENAI_API_KEY tanımlı değil. Render Environment bölümüne OpenAI API anahtarı eklenmeli."
+        )
+
+    model = os.environ.get("OPENAI_MODEL", "gpt-5.4-mini")
+    prompt = build_legal_prompt(case_type, petition_text)
+    body = {
+        "model": model,
+        "input": prompt,
+        "text": {
+            "format": {
+                "type": "json_schema",
+                "name": "iyuk_petition_analysis",
+                "strict": True,
+                "schema": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "verdict": {"type": "string", "enum": ["Geçer", "Riskli", "Geçmez"]},
+                        "score": {"type": "integer", "minimum": 0, "maximum": 100},
+                        "summary": {"type": "string"},
+                        "checklist": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "additionalProperties": False,
+                                "properties": {
+                                    "id": {"type": "string"},
+                                    "title": {"type": "string"},
+                                    "status": {"type": "string", "enum": ["uygun", "riskli", "eksik", "düzeltilmeli"]},
+                                    "explanation": {"type": "string"},
+                                    "recommendation": {"type": "string"},
+                                },
+                                "required": ["id", "title", "status", "explanation", "recommendation"],
+                            },
+                        },
+                        "missingInformation": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
+                        "revisedPetition": {"type": "string"},
+                    },
+                    "required": [
+                        "verdict",
+                        "score",
+                        "summary",
+                        "checklist",
+                        "missingInformation",
+                        "revisedPetition",
+                    ],
+                },
+            }
+        },
+    }
+
+    request = urllib.request.Request(
+        "https://api.openai.com/v1/responses",
+        data=json.dumps(body).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=90) as response:
+        data = json.loads(response.read().decode("utf-8"))
+
+    output_text = extract_response_text(data)
+    return json.loads(output_text)
+
+
+def build_legal_prompt(case_type: str, petition_text: str) -> str:
+    case_label = {
+        "tam-yargi": "Tam yargı davası",
+        "iptal": "İptal davası",
+        "iptal-tam-yargi": "İptal + tam yargı davası",
+        "yd": "Yürütmenin durdurulması talepli dava",
+    }.get(case_type, case_type)
+
+    return f"""
+Sen idari yargılama usulü alanında çalışan, İYUK m.3 ve idari dava dilekçelerinin ön inceleme şartları bakımından uzmanlaşmış bir dilekçe kontrol motorusun.
+
+Görev:
+- Aşağıdaki dilekçeyi dava türüne göre incele.
+- İYUK m.3 kapsamındaki unsurları tek tek değerlendir.
+- Görev, yetki, süre, ehliyet, husumet, dava konusu işlem, kesin/yürütülebilir işlem, tebliğ/öğrenme tarihi, sonuç ve istem, deliller, ekler, imza/tarih ve dava türüne özgü biçimsel unsurlar bakımından riskleri yaz.
+- Eksik gerçek bilgileri uydurma. Eksik bilgi gereken yerlere köşeli parantezli açıklama koy.
+- Düzeltilebilen anlatım, başlık, konu, sonuç ve istem bölümlerini uygun dilekçe formuna getir.
+- Yürütmenin durdurulması talepli davada ilgili ibareyi büyük harfli ve belirgin şekilde taslağa ekle.
+- Cevabı yalnızca istenen JSON şemasına uygun ver.
+
+Dava türü: {case_label}
+
+Dilekçe metni:
+{petition_text}
+""".strip()
+
+
+def extract_response_text(data: dict) -> str:
+    if data.get("output_text"):
+        return data["output_text"]
+
+    chunks = []
+    for output in data.get("output", []):
+        for content in output.get("content", []):
+            text = content.get("text")
+            if text:
+                chunks.append(text)
+    if chunks:
+        return "\n".join(chunks)
+
+    raise ValueError("OpenAI yanıtında metin bulunamadı.")
 
 
 def parse_multipart_file(content_type: str, body: bytes) -> tuple[str, bytes]:

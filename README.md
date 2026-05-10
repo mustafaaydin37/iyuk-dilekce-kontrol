@@ -58,6 +58,18 @@ Start Command: python server.py --host 0.0.0.0
 
 Render deploy tamamlandığında uygulama herkese açık bir `.onrender.com` adresinden çalışır.
 
+OpenAI destekli derin analiz için Render servisinde şu environment variable eklenmelidir:
+
+```text
+OPENAI_API_KEY=sk-...
+```
+
+İsteğe bağlı model seçimi:
+
+```text
+OPENAI_MODEL=gpt-5.4-mini
+```
+
 ## İlk sürüm kapsamı
 
 - Dilekçe metni yapıştırma
