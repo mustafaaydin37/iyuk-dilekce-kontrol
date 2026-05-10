@@ -8,12 +8,14 @@ const summaryTextEl = document.querySelector("#summaryText");
 const verdictBadgeEl = document.querySelector("#verdictBadge");
 const scoreValueEl = document.querySelector("#scoreValue");
 const scoreBarEl = document.querySelector("#scoreBar");
+const analysisOutputEl = document.querySelector("#analysisOutput");
 const draftOutputEl = document.querySelector("#draftOutput");
 const buildDraftBtn = document.querySelector("#buildDraftBtn");
 const downloadTxtBtn = document.querySelector("#downloadTxtBtn");
 const printBtn = document.querySelector("#printBtn");
 
 let lastAnalysis = null;
+let lastAiAnalysis = null;
 
 const caseTypeLabels = {
   auto: "Sistem tarafından belirlenecek",
@@ -175,7 +177,8 @@ fileEl.addEventListener("change", async () => {
     }
     textEl.value = result.text;
     fileStatusEl.textContent = `${file.name} yüklendi.`;
-    draftOutputEl.textContent = "Dosya metni dilekçe alanına aktarıldı. Dilekçeyi analiz et düğmesiyle analizi başlatabilirsiniz.";
+    analysisOutputEl.textContent = "Dosya metni dilekçe alanına aktarıldı. Dilekçeyi analiz et düğmesiyle analizi başlatabilirsiniz.";
+    draftOutputEl.textContent = "Taslak oluşturulduğunda burada görünecek.";
   } catch (error) {
     fileStatusEl.textContent = `${file.name} okunamadı.`;
     draftOutputEl.textContent = `Dosya yükleme hatası: ${error.message}`;
@@ -212,11 +215,13 @@ analyzeBtn.addEventListener("click", async () => {
     }
 
     lastAnalysis = mapAiAnalysis(result.analysis);
+    lastAiAnalysis = result.analysis;
     renderAnalysis(lastAnalysis);
-    draftOutputEl.textContent = buildAiReport(result.analysis);
+    analysisOutputEl.textContent = buildAiReport(result.analysis);
+    draftOutputEl.textContent = result.analysis.revisedPetition || "Taslak üretilemedi.";
   } catch (error) {
     summaryTextEl.textContent = "Analiz çalıştırılamadı.";
-    draftOutputEl.textContent = `Analiz hatası: ${error.message}`;
+    analysisOutputEl.textContent = `Analiz hatası: ${error.message}`;
   } finally {
     analyzeBtn.disabled = false;
     analyzeBtn.textContent = "Dilekçeyi analiz et";
@@ -228,6 +233,7 @@ clearBtn.addEventListener("click", () => {
   fileEl.value = "";
   fileStatusEl.textContent = "PDF, DOCX veya TXT dosyasını yükleyin.";
   lastAnalysis = null;
+  lastAiAnalysis = null;
   summaryTextEl.textContent = "Henüz analiz yapılmadı.";
   verdictBadgeEl.textContent = "Bekliyor";
   verdictBadgeEl.className = "badge neutral";
@@ -235,20 +241,27 @@ clearBtn.addEventListener("click", () => {
   scoreBarEl.value = 0;
   checklistEl.className = "checklist empty";
   checklistEl.textContent = "Dilekçe kontrolü burada listelenecek.";
-  draftOutputEl.textContent = "Analizden sonra taslak burada görünecek.";
+  analysisOutputEl.textContent = "Analizden sonra rapor burada görünecek.";
+  draftOutputEl.textContent = "Taslak oluşturulduğunda burada görünecek.";
 });
 
 buildDraftBtn.addEventListener("click", () => {
+  if (lastAiAnalysis?.revisedPetition) {
+    draftOutputEl.textContent = lastAiAnalysis.revisedPetition;
+    return;
+  }
+
   if (!lastAnalysis) {
     lastAnalysis = analyzePetition(textEl.value, "auto");
     renderAnalysis(lastAnalysis);
+    analysisOutputEl.textContent = "OpenAI analizi yapılmadığı için hızlı kontrol sonucuna göre yerel taslak oluşturuldu.";
   }
   draftOutputEl.textContent = buildDraft(textEl.value, lastAnalysis);
 });
 
 downloadTxtBtn.addEventListener("click", () => {
   const content = draftOutputEl.textContent.trim();
-  if (!content || content.startsWith("Analizden")) return;
+  if (!content || content.startsWith("Taslak")) return;
   const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
   const link = document.createElement("a");
   link.href = URL.createObjectURL(blob);
@@ -328,7 +341,7 @@ function mapAiAnalysis(ai) {
     id: item.id || item.title,
     title: item.title || "Kontrol unsuru",
     weight: 1,
-    status: item.status === "uygun" ? "ok" : "missing",
+    status: String(item.status || "").trim().toLocaleLowerCase("tr-TR") === "uygun" ? "ok" : "missing",
     message: item.explanation || item.recommendation || "Değerlendirme bulunamadı.",
   }));
 

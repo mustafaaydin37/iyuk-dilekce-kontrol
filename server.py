@@ -180,7 +180,7 @@ def analyze_with_openai(petition_text: str) -> dict:
 
     output_text = extract_response_text(data)
     analysis = json.loads(output_text)
-    return verify_analysis_against_text(analysis, petition_text)
+    return enforce_mechanical_findings(analysis, evidence)
 
 
 def build_legal_prompt(petition_text: str, evidence: dict) -> str:
@@ -230,32 +230,53 @@ def extract_response_text(data: dict) -> str:
     raise ValueError("OpenAI yanıtında metin bulunamadı.")
 
 
-def verify_analysis_against_text(analysis: dict, petition_text: str) -> dict:
-    normalized_petition = normalize_for_match(petition_text)
+def enforce_mechanical_findings(analysis: dict, evidence: dict) -> dict:
     checklist = analysis.get("checklist", [])
+    evidence_requirements = {
+        "court": ("mahkemeye_hitap", "Mahkemeye hitap bölümü mekanik kontrolde tespit edilemedi."),
+        "mahkemeye_hitap": ("mahkemeye_hitap", "Mahkemeye hitap bölümü mekanik kontrolde tespit edilemedi."),
+        "plaintiff": ("davacı", "Davacı bölümü mekanik kontrolde tespit edilemedi."),
+        "davacı": ("davacı", "Davacı bölümü mekanik kontrolde tespit edilemedi."),
+        "defendant": ("davali", "Davalı idare bölümü mekanik kontrolde tespit edilemedi."),
+        "davalı": ("davali", "Davalı idare bölümü mekanik kontrolde tespit edilemedi."),
+        "subject": ("konu", "Konu bölümü mekanik kontrolde tespit edilemedi."),
+        "konu": ("konu", "Konu bölümü mekanik kontrolde tespit edilemedi."),
+        "notice": ("teblig_ogrenme_tarihi", "Tebliğ/öğrenme tarihi mekanik kontrolde tespit edilemedi."),
+        "teblig": ("teblig_ogrenme_tarihi", "Tebliğ/öğrenme tarihi mekanik kontrolde tespit edilemedi."),
+        "tebliğ": ("teblig_ogrenme_tarihi", "Tebliğ/öğrenme tarihi mekanik kontrolde tespit edilemedi."),
+        "amount": ("tazminat_miktari", "Tam yargı bakımından tazminat miktarı mekanik kontrolde tespit edilemedi."),
+        "miktar": ("tazminat_miktari", "Tam yargı bakımından tazminat miktarı mekanik kontrolde tespit edilemedi."),
+        "request": ("sonuc_istem", "Sonuç ve istem bölümü mekanik kontrolde tespit edilemedi."),
+        "sonuç": ("sonuc_istem", "Sonuç ve istem bölümü mekanik kontrolde tespit edilemedi."),
+        "istem": ("sonuc_istem", "Sonuç ve istem bölümü mekanik kontrolde tespit edilemedi."),
+        "annex": ("ekler_deliller", "Ekler/deliller bölümü mekanik kontrolde tespit edilemedi."),
+        "ek": ("ekler_deliller", "Ekler/deliller bölümü mekanik kontrolde tespit edilemedi."),
+        "delil": ("ekler_deliller", "Ekler/deliller bölümü mekanik kontrolde tespit edilemedi."),
+        "signature": ("imza_tarih", "İmza/tarih alanı mekanik kontrolde tespit edilemedi."),
+        "imza": ("imza_tarih", "İmza/tarih alanı mekanik kontrolde tespit edilemedi."),
+    }
 
     for item in checklist:
         status = str(item.get("status", "")).casefold()
-        evidence = str(item.get("evidence", "")).strip()
+        item_evidence = str(item.get("evidence", "")).strip()
         if status != "uygun":
             continue
 
-        if not evidence or evidence in {"-", "yok", "bulunamadı"}:
+        if not item_evidence or item_evidence.casefold() in {"-", "yok", "bulunamadı"}:
             downgrade_item(item, "Uygunluk dayanağı gösterilmediği için bu unsur riskli kabul edildi.")
             continue
 
-        normalized_evidence = normalize_for_match(evidence)
-        if len(normalized_evidence) >= 16 and normalized_evidence not in normalized_petition:
-            downgrade_item(
-                item,
-                "Gösterilen dayanak dilekçe metninde aynen doğrulanamadığı için bu unsur riskli kabul edildi.",
-            )
+        requirement = find_requirement(item, evidence_requirements)
+        if requirement:
+            evidence_key, note = requirement
+            if not evidence_value_present(evidence_key, evidence):
+                downgrade_item(item, note)
 
     missing_count = sum(1 for item in checklist if str(item.get("status", "")).casefold() != "uygun")
     if checklist:
         recalculated = round(((len(checklist) - missing_count) / len(checklist)) * 100)
         current_score = int(analysis.get("score", recalculated))
-        analysis["score"] = min(current_score, recalculated)
+        analysis["score"] = current_score if 0 <= current_score <= 100 else recalculated
 
     if missing_count >= max(4, len(checklist) // 3):
         analysis["verdict"] = "Geçmez"
@@ -265,14 +286,23 @@ def verify_analysis_against_text(analysis: dict, petition_text: str) -> dict:
     return analysis
 
 
+def find_requirement(item: dict, requirements: dict[str, tuple[str, str]]) -> tuple[str, str] | None:
+    text = f"{item.get('id', '')} {item.get('title', '')}".casefold()
+    for keyword, requirement in requirements.items():
+        if keyword in text:
+            return requirement
+    return None
+
+
+def evidence_value_present(key: str, evidence: dict) -> bool:
+    value = str(evidence.get(key, "")).strip()
+    return bool(value)
+
+
 def downgrade_item(item: dict, note: str) -> None:
     item["status"] = "riskli"
     explanation = str(item.get("explanation", "")).strip()
     item["explanation"] = f"{explanation} {note}".strip()
-
-
-def normalize_for_match(value: str) -> str:
-    return re.sub(r"\s+", " ", value).strip().casefold()
 
 
 def extract_local_evidence(petition_text: str) -> dict:

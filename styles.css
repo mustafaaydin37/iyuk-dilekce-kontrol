@@ -75,6 +75,11 @@ h2 {
   font-size: 1.05rem;
 }
 
+h3 {
+  margin: 0 0 10px;
+  font-size: 0.95rem;
+}
+
 .lead {
   max-width: 760px;
   margin-bottom: 0;
@@ -396,9 +401,17 @@ progress::-webkit-progress-value {
   white-space: pre-wrap;
 }
 
+.comparison-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  align-items: start;
+}
+
 @media (max-width: 900px) {
   .intro,
-  .workspace {
+  .workspace,
+  .comparison-grid {
     grid-template-columns: 1fr;
   }
 

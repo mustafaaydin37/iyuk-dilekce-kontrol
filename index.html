@@ -76,8 +76,8 @@
       <section class="panel draft-panel">
         <div class="panel-header">
           <div>
-            <h2>Uygun Hale Getirilmiş Taslak</h2>
-            <p>Eksik gerçek bilgiler köşeli parantezle işaretlenir; uydurulmaz.</p>
+            <h2>Analiz ve Uygun Taslak</h2>
+            <p>Analiz raporu korunur; taslak yan tarafta karşılaştırmalı görünür.</p>
           </div>
           <div class="actions compact">
             <button id="buildDraftBtn" class="secondary">Taslak oluştur</button>
@@ -85,7 +85,16 @@
             <button id="printBtn" class="secondary">PDF yazdır</button>
           </div>
         </div>
-        <pre id="draftOutput" class="draft-output">Analizden sonra taslak burada görünecek.</pre>
+        <div class="comparison-grid">
+          <article>
+            <h3>Analiz Raporu</h3>
+            <pre id="analysisOutput" class="draft-output">Analizden sonra rapor burada görünecek.</pre>
+          </article>
+          <article>
+            <h3>Düzeltilmiş Taslak</h3>
+            <pre id="draftOutput" class="draft-output">Taslak oluşturulduğunda burada görünecek.</pre>
+          </article>
+        </div>
       </section>
     </main>
 
