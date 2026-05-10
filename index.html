@@ -67,6 +67,36 @@
             <progress id="scoreBar" value="0" max="100"></progress>
           </div>
 
+          <div id="metricsGrid" class="metrics-grid">
+            <div class="metric">
+              <span>Tespit edilen dava türü</span>
+              <strong id="caseTypeValue">-</strong>
+            </div>
+            <div class="metric">
+              <span>Kritik eksik</span>
+              <strong id="criticalValue">0</strong>
+            </div>
+            <div class="metric">
+              <span>Tamamlanabilir sorun</span>
+              <strong id="fixableValue">0</strong>
+            </div>
+          </div>
+
+          <div class="issue-grid">
+            <article>
+              <h3>Eksik Bilgiler</h3>
+              <ul id="missingInfoList" class="issue-list">
+                <li>Analizden sonra listelenecek.</li>
+              </ul>
+            </article>
+            <article>
+              <h3>Düzeltilebilir Noktalar</h3>
+              <ul id="fixableList" class="issue-list">
+                <li>Analizden sonra listelenecek.</li>
+              </ul>
+            </article>
+          </div>
+
           <div id="checklist" class="checklist empty">
             Dilekçe kontrolü burada listelenecek.
           </div>
@@ -89,6 +119,12 @@
           <article>
             <h3>Analiz Raporu</h3>
             <pre id="analysisOutput" class="draft-output">Analizden sonra rapor burada görünecek.</pre>
+          </article>
+          <article>
+            <h3>Detaylı Kontrol Tablosu</h3>
+            <div id="detailTable" class="detail-table empty-table">
+              Analizden sonra tablo burada görünecek.
+            </div>
           </article>
           <article>
             <h3>Düzeltilmiş Taslak</h3>

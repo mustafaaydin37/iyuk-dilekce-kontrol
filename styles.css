@@ -296,6 +296,59 @@ button {
   background: #f8faf8;
 }
 
+.metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.metric {
+  min-height: 78px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfb;
+}
+
+.metric span {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 750;
+}
+
+.metric strong {
+  display: block;
+  font-size: 1rem;
+  line-height: 1.25;
+}
+
+.issue-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.issue-grid article {
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfb;
+}
+
+.issue-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding-left: 18px;
+  color: var(--muted);
+  font-size: 0.88rem;
+  line-height: 1.45;
+}
+
 .score-label {
   display: block;
   color: var(--muted);
@@ -344,6 +397,16 @@ progress::-webkit-progress-value {
   padding: 12px;
   border: 1px solid var(--line);
   border-radius: 8px;
+}
+
+.check-item.risk {
+  border-color: #f0c36d;
+  background: #fffaf0;
+}
+
+.check-item.missing {
+  border-color: #f0aaa5;
+  background: #fff7f6;
 }
 
 .check-item strong {
@@ -403,16 +466,69 @@ progress::-webkit-progress-value {
 
 .comparison-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 0.95fr 1.05fr;
   gap: 16px;
   align-items: start;
+}
+
+.comparison-grid article:last-child {
+  grid-column: 1 / -1;
+}
+
+.detail-table {
+  max-height: 620px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.empty-table {
+  display: grid;
+  min-height: 260px;
+  place-items: center;
+  color: var(--muted);
+  border-style: dashed;
+}
+
+.detail-table table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.84rem;
+}
+
+.detail-table th,
+.detail-table td {
+  padding: 10px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+}
+
+.detail-table th {
+  position: sticky;
+  top: 0;
+  background: #f8faf8;
+  color: var(--ink);
+  font-size: 0.76rem;
+}
+
+.detail-table td {
+  color: var(--muted);
+  line-height: 1.45;
 }
 
 @media (max-width: 900px) {
   .intro,
   .workspace,
+  .metrics-grid,
+  .issue-grid,
   .comparison-grid {
     grid-template-columns: 1fr;
+  }
+
+  .comparison-grid article:last-child {
+    grid-column: auto;
   }
 
   .panel-header {

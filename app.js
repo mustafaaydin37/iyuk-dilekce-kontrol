@@ -8,8 +8,14 @@ const summaryTextEl = document.querySelector("#summaryText");
 const verdictBadgeEl = document.querySelector("#verdictBadge");
 const scoreValueEl = document.querySelector("#scoreValue");
 const scoreBarEl = document.querySelector("#scoreBar");
+const caseTypeValueEl = document.querySelector("#caseTypeValue");
+const criticalValueEl = document.querySelector("#criticalValue");
+const fixableValueEl = document.querySelector("#fixableValue");
+const missingInfoListEl = document.querySelector("#missingInfoList");
+const fixableListEl = document.querySelector("#fixableList");
 const analysisOutputEl = document.querySelector("#analysisOutput");
 const draftOutputEl = document.querySelector("#draftOutput");
+const detailTableEl = document.querySelector("#detailTable");
 const buildDraftBtn = document.querySelector("#buildDraftBtn");
 const downloadTxtBtn = document.querySelector("#downloadTxtBtn");
 const printBtn = document.querySelector("#printBtn");
@@ -217,6 +223,7 @@ analyzeBtn.addEventListener("click", async () => {
     lastAnalysis = mapAiAnalysis(result.analysis);
     lastAiAnalysis = result.analysis;
     renderAnalysis(lastAnalysis);
+    renderAiPanels(result.analysis);
     analysisOutputEl.textContent = buildAiReport(result.analysis);
     draftOutputEl.textContent = result.analysis.revisedPetition || "Taslak üretilemedi.";
   } catch (error) {
@@ -239,10 +246,17 @@ clearBtn.addEventListener("click", () => {
   verdictBadgeEl.className = "badge neutral";
   scoreValueEl.textContent = "0%";
   scoreBarEl.value = 0;
+  caseTypeValueEl.textContent = "-";
+  criticalValueEl.textContent = "0";
+  fixableValueEl.textContent = "0";
+  renderList(missingInfoListEl, ["Analizden sonra listelenecek."]);
+  renderList(fixableListEl, ["Analizden sonra listelenecek."]);
   checklistEl.className = "checklist empty";
   checklistEl.textContent = "Dilekçe kontrolü burada listelenecek.";
   analysisOutputEl.textContent = "Analizden sonra rapor burada görünecek.";
   draftOutputEl.textContent = "Taslak oluşturulduğunda burada görünecek.";
+  detailTableEl.className = "detail-table empty-table";
+  detailTableEl.textContent = "Analizden sonra tablo burada görünecek.";
 });
 
 buildDraftBtn.addEventListener("click", () => {
@@ -324,9 +338,9 @@ function renderAnalysis(analysis) {
   checklistEl.innerHTML = "";
   analysis.items.forEach((item) => {
     const row = document.createElement("article");
-    row.className = "check-item";
+    row.className = `check-item ${item.status === "ok" ? "" : item.rawStatus === "eksik" ? "missing" : "risk"}`;
     row.innerHTML = `
-      <span class="pill ${item.status === "ok" ? "ok" : "missing"}">${item.status === "ok" ? "Uygun" : "Eksik"}</span>
+      <span class="pill ${item.status === "ok" ? "ok" : item.rawStatus === "eksik" ? "missing" : "risk"}">${item.label}</span>
       <div>
         <strong>${item.title}</strong>
         <p>${item.message}</p>
@@ -337,13 +351,18 @@ function renderAnalysis(analysis) {
 }
 
 function mapAiAnalysis(ai) {
-  const items = (ai.checklist || []).map((item) => ({
-    id: item.id || item.title,
-    title: item.title || "Kontrol unsuru",
-    weight: 1,
-    status: String(item.status || "").trim().toLocaleLowerCase("tr-TR") === "uygun" ? "ok" : "missing",
-    message: item.explanation || item.recommendation || "Değerlendirme bulunamadı.",
-  }));
+  const items = (ai.checklist || []).map((item) => {
+    const rawStatus = normalizeStatus(item.status);
+    return {
+      id: item.id || item.title,
+      title: item.title || "Kontrol unsuru",
+      weight: 1,
+      rawStatus,
+      label: statusLabel(rawStatus),
+      status: rawStatus === "uygun" ? "ok" : "missing",
+      message: item.explanation || item.recommendation || "Değerlendirme bulunamadı.",
+    };
+  });
 
   const missingCount = items.filter((item) => item.status !== "ok").length;
   const score = Number.isFinite(ai.score) ? ai.score : Math.max(0, Math.round(((items.length - missingCount) / Math.max(items.length, 1)) * 100));
@@ -364,6 +383,93 @@ function mapAiAnalysis(ai) {
     items,
     missingCount,
   };
+}
+
+function renderAiPanels(ai) {
+  const checklist = ai.checklist || [];
+  const criticalItems = checklist.filter((item) => ["eksik", "riskli"].includes(normalizeStatus(item.status)));
+  const fixableItems = checklist.filter((item) => {
+    const recommendation = String(item.recommendation || "");
+    return normalizeStatus(item.status) === "düzeltilmeli" || /düzenlen|eklen|yazıl|netleştir|düzeltil/i.test(recommendation);
+  });
+
+  caseTypeValueEl.textContent = ai.detectedCaseType || "-";
+  criticalValueEl.textContent = String(criticalItems.length);
+  fixableValueEl.textContent = String(fixableItems.length);
+
+  renderList(missingInfoListEl, ai.missingInformation?.length ? ai.missingInformation : ["Eksik gerçek bilgi bildirilmedi."]);
+  renderList(
+    fixableListEl,
+    fixableItems.length
+      ? fixableItems.slice(0, 6).map((item) => `${item.title}: ${item.recommendation || item.explanation}`)
+      : ["Biçimsel düzeltme önerisi bildirilmedi."],
+  );
+  renderDetailTable(checklist);
+}
+
+function renderList(target, items) {
+  target.innerHTML = "";
+  items.forEach((item) => {
+    const li = document.createElement("li");
+    li.textContent = item;
+    target.appendChild(li);
+  });
+}
+
+function renderDetailTable(items) {
+  if (!items.length) {
+    detailTableEl.className = "detail-table empty-table";
+    detailTableEl.textContent = "Kontrol tablosu oluşturulamadı.";
+    return;
+  }
+
+  detailTableEl.className = "detail-table";
+  const rows = items
+    .map((item) => {
+      const status = normalizeStatus(item.status);
+      return `<tr>
+        <td><span class="pill ${status === "uygun" ? "ok" : status === "eksik" ? "missing" : "risk"}">${escapeHtml(statusLabel(status))}</span></td>
+        <td>${escapeHtml(item.title || "-")}</td>
+        <td>${escapeHtml(item.evidence || "-")}</td>
+        <td>${escapeHtml(item.recommendation || item.explanation || "-")}</td>
+      </tr>`;
+    })
+    .join("");
+
+  detailTableEl.innerHTML = `<table>
+    <thead>
+      <tr>
+        <th>Durum</th>
+        <th>Unsur</th>
+        <th>Dayanak</th>
+        <th>Öneri</th>
+      </tr>
+    </thead>
+    <tbody>${rows}</tbody>
+  </table>`;
+}
+
+function normalizeStatus(status) {
+  return String(status || "").trim().toLocaleLowerCase("tr-TR");
+}
+
+function statusLabel(status) {
+  const labels = {
+    uygun: "Uygun",
+    riskli: "Riskli",
+    eksik: "Eksik",
+    düzeltilmeli: "Düzeltilmeli",
+  };
+  return labels[status] || "Riskli";
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
 }
 
 function buildAiReport(ai) {
