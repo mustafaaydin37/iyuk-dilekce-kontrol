@@ -17,6 +17,24 @@ from pypdf import PdfReader
 ROOT = Path(__file__).resolve().parent
 HOST = "127.0.0.1"
 PORT = 8765
+CANONICAL_CHECKS = [
+    ("mahkeme", "Mahkemeye hitap"),
+    ("dava_turu", "Dava türü ve istemin belirginliği"),
+    ("yd_ibaresi", "Yürütmenin durdurulması ibaresi"),
+    ("davaci", "Davacı kimliği ve adresi"),
+    ("vekil", "Vekil bilgisi"),
+    ("davali", "Davalı idare ve husumet"),
+    ("dava_konusu", "Dava konusu işlem"),
+    ("kesin_yurutulebilir", "Kesin ve yürütülebilir işlem"),
+    ("teblig", "Tebliğ/öğrenme tarihi"),
+    ("sure", "Süre unsuru"),
+    ("aciklamalar", "Açıklamalar ve hukuka aykırılık nedenleri"),
+    ("hukuki_nedenler", "Hukuki nedenler"),
+    ("sonuc_istem", "Sonuç ve istem"),
+    ("deliller", "Deliller"),
+    ("ekler", "Ekler ve dosya belgeleri"),
+    ("imza_tarih", "İmza ve tarih"),
+]
 
 
 class PetitionHandler(SimpleHTTPRequestHandler):
@@ -190,6 +208,7 @@ def analyze_with_openai(petition_text: str) -> dict:
 
     output_text = extract_response_text(data)
     analysis = json.loads(output_text)
+    analysis = normalize_checklist(analysis, evidence)
     analysis = enforce_mechanical_findings(analysis, evidence)
     return normalize_issue_categories(analysis, evidence)
 
@@ -303,6 +322,137 @@ def enforce_mechanical_findings(analysis: dict, evidence: dict) -> dict:
     return analysis
 
 
+def normalize_checklist(analysis: dict, evidence: dict) -> dict:
+    source_items = analysis.get("checklist", [])
+    normalized_items = []
+    for check_id, title in CANONICAL_CHECKS:
+        model_item = find_model_item(check_id, title, source_items)
+        mechanical = mechanical_item(check_id, title, evidence)
+        normalized_items.append(merge_item(model_item, mechanical))
+
+    analysis["checklist"] = normalized_items
+    missing_count = sum(1 for item in normalized_items if fold_tr(item["status"]) in {"eksik", "riskli"})
+    fixable_count = sum(1 for item in normalized_items if fold_tr(item["status"]) == "düzeltilmeli")
+    analysis["score"] = max(0, min(100, round(((len(normalized_items) - missing_count - (fixable_count * 0.35)) / len(normalized_items)) * 100)))
+    if missing_count == 0:
+        analysis["verdict"] = "Geçer" if fixable_count <= 3 else "Riskli"
+    elif missing_count <= 2:
+        analysis["verdict"] = "Riskli"
+    else:
+        analysis["verdict"] = "Geçmez"
+    return analysis
+
+
+def find_model_item(check_id: str, title: str, items: list[dict]) -> dict | None:
+    haystacks = {
+        "mahkeme": ["mahkeme", "hitap", "görev", "yetki"],
+        "dava_turu": ["dava tür", "istem", "iptal", "tam yargı"],
+        "yd_ibaresi": ["yürütme", "yd"],
+        "davaci": ["davacı", "kimlik", "adres", "ehliyet"],
+        "vekil": ["vekil", "avukat", "vekâlet", "vekalet"],
+        "davali": ["davalı", "husumet"],
+        "dava_konusu": ["dava konusu", "işlem"],
+        "kesin_yurutulebilir": ["kesin", "yürütülebilir", "icrai"],
+        "teblig": ["tebliğ", "tebellüğ", "öğrenme"],
+        "sure": ["süre"],
+        "aciklamalar": ["açıklama", "vakıa", "sebep"],
+        "hukuki_nedenler": ["hukuki", "neden", "sebep"],
+        "sonuc_istem": ["sonuç", "istem", "talep"],
+        "deliller": ["delil"],
+        "ekler": ["ekler", "ek "],
+        "imza_tarih": ["imza", "tarih"],
+    }
+    keywords = haystacks.get(check_id, [title])
+    for item in items:
+        text = fold_tr(f"{item.get('id', '')} {item.get('title', '')}")
+        if any(fold_tr(keyword) in text for keyword in keywords):
+            return item
+    return None
+
+
+def merge_item(model_item: dict | None, mechanical: dict) -> dict:
+    if not model_item:
+        return mechanical
+
+    model_status = fold_tr(str(model_item.get("status", "")))
+    mechanical_status = fold_tr(mechanical["status"])
+    final = mechanical.copy()
+
+    if mechanical_status == "uygun" and model_status in {"riskli", "eksik", "düzeltilmeli"}:
+        final["status"] = "düzeltilmeli" if model_status == "düzeltilmeli" else "riskli"
+        final["explanation"] = model_item.get("explanation") or final["explanation"]
+        final["recommendation"] = model_item.get("recommendation") or final["recommendation"]
+    else:
+        final["explanation"] = model_item.get("explanation") or final["explanation"]
+        final["recommendation"] = model_item.get("recommendation") or final["recommendation"]
+
+    final["evidence"] = mechanical.get("evidence") or model_item.get("evidence") or "-"
+    return final
+
+
+def mechanical_item(check_id: str, title: str, evidence: dict) -> dict:
+    item = {
+        "id": check_id,
+        "title": title,
+        "status": "uygun",
+        "evidence": "-",
+        "explanation": "Mekanik kontrolde uygunluk dayanağı tespit edildi.",
+        "recommendation": "Korunabilir.",
+    }
+
+    def set_item(status: str, key: str, explanation: str, recommendation: str) -> dict:
+        item["status"] = status
+        item["evidence"] = str(evidence.get(key, "") or "-")
+        item["explanation"] = explanation
+        item["recommendation"] = recommendation
+        return item
+
+    if check_id == "mahkeme":
+        return set_item("uygun" if evidence.get("mahkemeye_hitap") else "eksik", "mahkemeye_hitap", "Mahkemeye hitap kontrol edildi.", "Mahkeme başlığı açıkça yazılmalıdır.")
+    if check_id == "dava_turu":
+        return set_item("uygun" if evidence.get("konu") or evidence.get("sonuc_istem") else "eksik", "konu", "Dava türü konu/istem bölümünden anlaşılabilir.", "Dava türü konu ve istemde netleştirilmelidir.")
+    if check_id == "yd_ibaresi":
+        needs_yd = bool(evidence.get("yd_ihtiyaci") or evidence.get("yd_ibaresi"))
+        status = "uygun" if evidence.get("yd_ibaresi") else "eksik" if needs_yd else "uygun"
+        return set_item(status, "yd_ibaresi", "YD ibaresi ve YD ihtiyacı kontrol edildi.", "YD talebi varsa ibare büyük harfle yazılmalıdır.")
+    if check_id == "davaci":
+        ok = evidence_value_present("davacı_kimlik_adres", evidence)
+        return set_item("uygun" if ok else "eksik", "davacı", "Davacı kimliği ve adresi kontrol edildi.", "Davacı adı, TCKN ve açık adres yazılmalıdır.")
+    if check_id == "vekil":
+        status = "uygun" if evidence.get("vekil") else "uygun"
+        return set_item(status, "vekil", "Vekil bilgisi varsa kontrol edildi.", "Vekil varsa vekaletname ek/dosya kontrolünde teyit edilmelidir.")
+    if check_id == "davali":
+        return set_item("uygun" if evidence.get("davali") else "eksik", "davali", "Davalı idare kontrol edildi.", "Davalı idare açıkça gösterilmelidir.")
+    if check_id == "dava_konusu":
+        return set_item("uygun" if evidence.get("konu") else "eksik", "konu", "Dava konusu işlem kontrol edildi.", "İşlem tarihi/sayısı ve istem açıkça yazılmalıdır.")
+    if check_id == "kesin_yurutulebilir":
+        return set_item("uygun" if evidence.get("islem_gorunumu") else "riskli", "islem_gorunumu", "İşlemin icrai görünümü kontrol edildi.", "Dava konusu işlemin kesin ve yürütülebilir olduğu metinden anlaşılmalıdır.")
+    if check_id == "teblig":
+        return set_item("uygun" if evidence.get("teblig_ogrenme_tarihi") else "eksik", "teblig_ogrenme_tarihi", "Tebliğ/öğrenme tarihi kontrol edildi.", "Tebliğ veya öğrenme tarihi yazılmalıdır.")
+    if check_id == "sure":
+        return set_item("uygun" if evidence.get("teblig_ogrenme_tarihi") else "riskli", "teblig_ogrenme_tarihi", "Süre için başlangıç tarihi kontrol edildi.", "Süre hesabı tebliğ/öğrenme tarihine göre ayrıca yapılmalıdır.")
+    if check_id == "aciklamalar":
+        return set_item("uygun" if evidence.get("aciklamalar") else "riskli", "aciklamalar", "Maddi olaylar kontrol edildi.", "Maddi olaylar ve hukuka aykırılık nedenleri açıklanmalıdır.")
+    if check_id == "hukuki_nedenler":
+        return set_item("uygun" if evidence.get("hukuki_nedenler") else "düzeltilmeli", "hukuki_nedenler", "Hukuki nedenler kontrol edildi.", "Hukuki nedenler başlığı eklenebilir veya güçlendirilebilir.")
+    if check_id == "sonuc_istem":
+        return set_item("uygun" if evidence.get("sonuc_istem") else "eksik", "sonuc_istem", "Sonuç ve istem kontrol edildi.", "Sonuç ve istem açıkça yazılmalıdır.")
+    if check_id == "deliller":
+        return set_item("uygun" if evidence.get("deliller") or evidence.get("ekler_deliller") else "düzeltilmeli", "deliller", "Deliller kontrol edildi.", "Deliller ayrı başlık altında gösterilmelidir.")
+    if check_id == "ekler":
+        if evidence.get("ekler"):
+            return set_item("uygun", "ekler", "Ekler başlığı mevcut.", "Ekler numaralandırılabilir.")
+        return set_item("düzeltilmeli" if evidence.get("deliller") else "eksik", "deliller", "Deliller/ekler sunuluş biçimi kontrol edildi.", "Ayrı EKLER başlığı açılıp belgeler numaralandırılmalıdır.")
+    if check_id == "imza_tarih":
+        if evidence.get("imza_tarih"):
+            return set_item("uygun", "imza_tarih", "İmza ve tarih mevcut.", "Korunabilir.")
+        if evidence.get("imza_var"):
+            return set_item("düzeltilmeli", "imza_var", "İmza var ancak dilekçe tarihi tespit edilemedi.", "Dilekçe sonuna gün/ay/yıl tarihi eklenmelidir.")
+        return set_item("eksik", "imza_var", "İmza/tarih alanı tespit edilemedi.", "Dilekçe tarih ve imza ile tamamlanmalıdır.")
+
+    return item
+
+
 def normalize_issue_categories(analysis: dict, evidence: dict) -> dict:
     missing = []
     fixable = list(analysis.get("fixableIssues", []))
@@ -409,19 +559,28 @@ def extract_local_evidence(petition_text: str) -> dict:
     sections = extract_sections(petition_text)
     text = re.sub(r"\s+", " ", petition_text).strip()
     plaintiff_section = sections.get("davacı") or find_labeled_excerpt(text, "davacı", ["vekili", "davalı", "konu"])
+    signature_block = extract_signature_block(petition_text)
     return {
         "mahkemeye_hitap": sections.get("mahkeme") or find_excerpt(text, r"(danıştay|idare mahkemesi|vergi mahkemesi).{0,110}(başkanlığı'?na|dairesi'?ne)"),
         "davacı": plaintiff_section,
         "davacı_kimlik_no": find_excerpt(plaintiff_section, r"(t\.?\s*c\.?\s*)?(kimlik\s*)?(no|numarası)?\s*:?\s*[1-9][0-9]{10}"),
         "davacı_adresi_olabilir": find_excerpt(plaintiff_section, r"(adres\s*:|mahallesi|mah\.|sokak|sok\.|cadde|cad\.|bulvar|bulv\.|no\s*:|daire|d\s*:|/\s*[A-ZÇĞİÖŞÜa-zçğıöşü]+)"),
+        "vekil": sections.get("vekili") or find_labeled_excerpt(text, "vekili", ["davalı", "konu", "tebellüğ", "tebliğ", "açıklamalar"]),
         "davali": sections.get("davalı") or find_labeled_excerpt(text, "davalı", ["konu", "tebellüğ", "tebliğ", "açıklamalar"]),
         "konu": sections.get("konu") or find_labeled_excerpt(text, "konu", ["tebellüğ", "tebliğ", "açıklamalar", "olaylar"]),
         "teblig_ogrenme_tarihi": sections.get("tebliğ") or find_excerpt(text, r"(tebellüğ|tebliğ|öğrenme|bildirim).{0,80}\d{1,2}[./]\d{1,2}[./]\d{4}"),
         "tazminat_miktari": find_excerpt(text, r"\d[\d.,]*\s*(tl|₺|türk lirası)"),
         "yd_ibaresi": find_excerpt(text, r"YÜRÜTMENİN\s+DURDURULMASI\s+TALEPLİDİR|yürütmenin\s+durdurulması"),
+        "yd_ihtiyaci": find_excerpt(text, r"telafisi\s+güç|yürütmenin\s+durdurulması|açıkça\s+hukuka\s+aykırı"),
+        "islem_gorunumu": find_excerpt(text, r"(işlem|karar|atama|naklen|ret|tesis).{0,100}(tarih|sayılı|iptal|tebliğ|atan)"),
+        "aciklamalar": sections.get("açıklamalar") or find_excerpt(text, r"(açıklamalar|olaylar).{0,500}"),
+        "hukuki_nedenler": sections.get("hukuki sebepler") or find_excerpt(text, r"(hukuki\s+(nedenler|sebepler)|2577|iyuk|anayasa|kanunu)"),
+        "deliller": sections.get("deliller") or find_excerpt(text, r"(deliller|tanık|belge|kararı|cetveli|kayıt örneği)"),
+        "ekler": sections.get("ekler"),
         "sonuc_istem": sections.get("sonuç") or find_excerpt(text, r"(sonuç|netice).{0,30}(talep|istem)"),
         "ekler_deliller": sections.get("ekler") or find_excerpt(text, r"(ekler|deliller|ek\s*:)"),
-        "imza_tarih": find_excerpt(text[-900:], r"\d{1,2}[./]\d{1,2}[./]\d{4}.{0,180}(davacı|vekili|av\.)"),
+        "imza_var": find_excerpt(signature_block, r"(imza|davacı|vekili|av\.)"),
+        "imza_tarih": find_excerpt(signature_block, r"\d{1,2}[./]\d{1,2}[./]\d{4}|\[?gün/ay/yıl\]?|\[?tarih\]?"),
     }
 
 
@@ -452,6 +611,16 @@ def find_labeled_excerpt(text: str, label: str, stop_labels: list[str] | None = 
     )
     end = match.end() + next_label.start() if next_label else min(len(text), start + 450)
     return text[start:end].strip()
+
+
+def extract_signature_block(petition_text: str) -> str:
+    lines = [line.strip() for line in petition_text.replace("\r", "\n").split("\n") if line.strip()]
+    start_index = max(0, len(lines) - 8)
+    for index in range(len(lines) - 1, -1, -1):
+        if re.search(r"^(davacı|vekili|av\.|imza)\b", lines[index], flags=re.IGNORECASE):
+            start_index = max(0, index - 2)
+            break
+    return " ".join(lines[start_index:])
 
 
 def extract_sections(petition_text: str) -> dict[str, str]:
@@ -486,7 +655,8 @@ def detect_heading(line: str) -> str | None:
         "hukuki sebepler": ["hukuki sebepler", "hukuki nedenler", "yasal sebepler"],
         "tebliğ": ["tebellüğ tarihi", "tebliğ tarihi", "öğrenme tarihi", "bildirim tarihi"],
         "sonuç": ["sonuç ve talep", "sonuç ve istem", "netice ve talep", "sonuç", "istem"],
-        "ekler": ["ekler", "deliller", "ek", "ekler ve deliller"],
+        "deliller": ["deliller", "deliller ve belgeler", "delil listesi"],
+        "ekler": ["ekler", "ek", "ekler ve deliller"],
     }
     for key, names in aliases.items():
         for name in names:
@@ -505,7 +675,8 @@ def strip_heading(line: str, heading: str) -> str:
         "hukuki sebepler": r"hukuki sebepler|hukuki nedenler|yasal sebepler",
         "tebliğ": r"tebellüğ tarihi|tebliğ tarihi|öğrenme tarihi|bildirim tarihi",
         "sonuç": r"sonuç\s+ve\s+(?:talep|istem)|netice\s+ve\s+talep|sonuç|istem",
-        "ekler": r"ekler\s+ve\s+deliller|ekler|deliller|ek",
+        "deliller": r"deliller\s+ve\s+belgeler|delil listesi|deliller",
+        "ekler": r"ekler\s+ve\s+deliller|ekler|ek",
     }
     pattern = aliases.get(heading)
     if not pattern:

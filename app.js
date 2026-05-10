@@ -390,22 +390,26 @@ function mapAiAnalysis(ai) {
 function renderAiPanels(ai) {
   const checklist = ai.checklist || [];
   const criticalItems = checklist.filter((item) => ["eksik", "riskli"].includes(normalizeStatus(item.status)));
-  const fixableItems = checklist.filter((item) => {
-    const recommendation = String(item.recommendation || "");
-    return normalizeStatus(item.status) === "düzeltilmeli" || /düzenlen|eklen|yazıl|netleştir|düzeltil/i.test(recommendation);
-  });
+  const fixableItems = checklist.filter((item) => normalizeStatus(item.status) === "düzeltilmeli");
 
   caseTypeValueEl.textContent = ai.detectedCaseType || "-";
   criticalValueEl.textContent = String(criticalItems.length);
-  fixableValueEl.textContent = String((ai.fixableIssues?.length || 0) + fixableItems.length);
+  fixableValueEl.textContent = String(uniqueTextList([
+    ...fixableItems.map((item) => item.title || item.recommendation || item.explanation),
+    ...(ai.fixableIssues || []),
+  ]).length);
 
   renderList(missingInfoListEl, ai.missingInformation?.length ? ai.missingInformation : ["Eksik gerçek bilgi bildirilmedi."]);
   renderList(
     fixableListEl,
-    ai.fixableIssues?.length
-      ? ai.fixableIssues
-      : fixableItems.length
-      ? fixableItems.slice(0, 6).map((item) => `${item.title}: ${item.recommendation || item.explanation}`)
+    uniqueTextList([
+      ...(ai.fixableIssues || []),
+      ...fixableItems.map((item) => `${item.title}: ${item.recommendation || item.explanation}`),
+    ]).length
+      ? uniqueTextList([
+          ...(ai.fixableIssues || []),
+          ...fixableItems.map((item) => `${item.title}: ${item.recommendation || item.explanation}`),
+        ])
       : ["Biçimsel düzeltme önerisi bildirilmedi."],
   );
   renderList(
@@ -413,6 +417,20 @@ function renderAiPanels(ai) {
     ai.attachmentIssues?.length ? ai.attachmentIssues : ["Ek/dosya kontrolü için ayrıca uyarı bildirilmedi."],
   );
   renderDetailTable(checklist);
+}
+
+function uniqueTextList(values) {
+  const seen = new Set();
+  const result = [];
+  values.forEach((value) => {
+    const cleaned = String(value || "").trim();
+    if (!cleaned) return;
+    const key = cleaned.toLocaleLowerCase("tr-TR");
+    if (seen.has(key)) return;
+    seen.add(key);
+    result.push(cleaned);
+  });
+  return result;
 }
 
 function renderList(target, items) {
