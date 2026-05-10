@@ -13,6 +13,7 @@ const criticalValueEl = document.querySelector("#criticalValue");
 const fixableValueEl = document.querySelector("#fixableValue");
 const missingInfoListEl = document.querySelector("#missingInfoList");
 const fixableListEl = document.querySelector("#fixableList");
+const attachmentListEl = document.querySelector("#attachmentList");
 const analysisOutputEl = document.querySelector("#analysisOutput");
 const draftOutputEl = document.querySelector("#draftOutput");
 const detailTableEl = document.querySelector("#detailTable");
@@ -251,6 +252,7 @@ clearBtn.addEventListener("click", () => {
   fixableValueEl.textContent = "0";
   renderList(missingInfoListEl, ["Analizden sonra listelenecek."]);
   renderList(fixableListEl, ["Analizden sonra listelenecek."]);
+  renderList(attachmentListEl, ["Analizden sonra listelenecek."]);
   checklistEl.className = "checklist empty";
   checklistEl.textContent = "Dilekçe kontrolü burada listelenecek.";
   analysisOutputEl.textContent = "Analizden sonra rapor burada görünecek.";
@@ -395,14 +397,20 @@ function renderAiPanels(ai) {
 
   caseTypeValueEl.textContent = ai.detectedCaseType || "-";
   criticalValueEl.textContent = String(criticalItems.length);
-  fixableValueEl.textContent = String(fixableItems.length);
+  fixableValueEl.textContent = String((ai.fixableIssues?.length || 0) + fixableItems.length);
 
   renderList(missingInfoListEl, ai.missingInformation?.length ? ai.missingInformation : ["Eksik gerçek bilgi bildirilmedi."]);
   renderList(
     fixableListEl,
-    fixableItems.length
+    ai.fixableIssues?.length
+      ? ai.fixableIssues
+      : fixableItems.length
       ? fixableItems.slice(0, 6).map((item) => `${item.title}: ${item.recommendation || item.explanation}`)
       : ["Biçimsel düzeltme önerisi bildirilmedi."],
+  );
+  renderList(
+    attachmentListEl,
+    ai.attachmentIssues?.length ? ai.attachmentIssues : ["Ek/dosya kontrolü için ayrıca uyarı bildirilmedi."],
   );
   renderDetailTable(checklist);
 }
@@ -486,6 +494,12 @@ Değerlendirme: ${item.explanation}
   const missingInfo = (ai.missingInformation || [])
     .map((item, index) => `${index + 1}. ${item}`)
     .join("\n");
+  const fixableInfo = (ai.fixableIssues || [])
+    .map((item, index) => `${index + 1}. ${item}`)
+    .join("\n");
+  const attachmentInfo = (ai.attachmentIssues || [])
+    .map((item, index) => `${index + 1}. ${item}`)
+    .join("\n");
 
   return `OPENAI DESTEKLİ ÖN İNCELEME RAPORU
 
@@ -502,6 +516,12 @@ ${checklist || "-"}
 
 Eksik gerçek bilgiler:
 ${missingInfo || "-"}
+
+Düzeltilebilir noktalar:
+${fixableInfo || "-"}
+
+Ek/dosya kontrolü:
+${attachmentInfo || "-"}
 
 Uygun hale getirilmiş dilekçe taslağı:
 ${ai.revisedPetition || "[Taslak üretilemedi.]"}

@@ -149,6 +149,14 @@ def analyze_with_openai(petition_text: str) -> dict:
                             "type": "array",
                             "items": {"type": "string"},
                         },
+                        "fixableIssues": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
+                        "attachmentIssues": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
                         "revisedPetition": {"type": "string"},
                     },
                     "required": [
@@ -159,6 +167,8 @@ def analyze_with_openai(petition_text: str) -> dict:
                         "summary",
                         "checklist",
                         "missingInformation",
+                        "fixableIssues",
+                        "attachmentIssues",
                         "revisedPetition",
                     ],
                 },
@@ -180,7 +190,8 @@ def analyze_with_openai(petition_text: str) -> dict:
 
     output_text = extract_response_text(data)
     analysis = json.loads(output_text)
-    return enforce_mechanical_findings(analysis, evidence)
+    analysis = enforce_mechanical_findings(analysis, evidence)
+    return normalize_issue_categories(analysis, evidence)
 
 
 def build_legal_prompt(petition_text: str, evidence: dict) -> str:
@@ -195,6 +206,12 @@ Görev:
 - Dilekçede yürütmenin durdurulması isteniyor veya olayın niteliği YD talebini gerektiriyor gibi görünüyorsa, “YÜRÜTMENİN DURDURULMASI TALEPLİDİR” ibaresinin bulunup bulunmadığını özellikle kontrol et.
 - Kullanıcı iptal davası gibi görünen bir dilekçe sunmuş ama YD talebine ilişkin olgular/istemler var ve ibare eksikse bunu açıkça eksik/riskli unsur olarak işaretle.
 - Eksik gerçek bilgileri uydurma. Eksik bilgi gereken yerlere köşeli parantezli açıklama koy.
+- missingInformation alanına sadece dilekçe metninde bulunmayan ve kullanıcıdan öğrenilmesi gereken gerçek olay/bilgi eksiklerini yaz.
+- missingInformation alanına dava açılış tarihi yazma; dava açılış tarihi mahkemeye sunumla oluşur. Dilekçe sonunda tarih yoksa bunu checklist içinde “imza ve tarih” başlığında düzeltilmeli/riskli değerlendir.
+- Deliller veya belgeler dilekçede sayılmışsa ama ayrı “EKLER” başlığı yoksa bunu kritik eksik yapma; “düzeltilmeli” olarak sınıflandır ve fixableIssues/attachmentIssues alanına koy.
+- Tebliğ belgesi, vekaletname veya eklerin fiilen dosyaya konulup konulmadığı metinden anlaşılamıyorsa bunu missingInformation değil attachmentIssues olarak yaz.
+- Husumet/yetki bakımından açık çelişki yoksa “riskli” deme; “uygun” veya gerekirse “düzeltilmeli” deyip dosya ekiyle teyit öner.
+- Kritik eksik yalnızca mahkeme, davacı, davalı, dava konusu işlem, tebliğ/öğrenme tarihi, sonuç/istem gibi ön incelemede doğrudan sorun yaratabilecek zorunlu unsurlar gerçekten yoksa kullanılmalıdır.
 - Düzeltilebilen anlatım, başlık, konu, sonuç ve istem bölümlerini uygun dilekçe formuna getir.
 - Yürütmenin durdurulması talepli olduğu sonucuna varırsan ilgili ibareyi büyük harfli ve belirgin şekilde taslağa ekle.
 - Her kontrol maddesinde kararını dilekçedeki somut metin parçasına bağla.
@@ -284,6 +301,83 @@ def enforce_mechanical_findings(analysis: dict, evidence: dict) -> dict:
         analysis["verdict"] = "Riskli"
 
     return analysis
+
+
+def normalize_issue_categories(analysis: dict, evidence: dict) -> dict:
+    missing = []
+    fixable = list(analysis.get("fixableIssues", []))
+    attachments = list(analysis.get("attachmentIssues", []))
+
+    for item in analysis.get("missingInformation", []):
+        target = classify_issue_text(str(item))
+        if target == "drop":
+            continue
+        if target == "attachment":
+            attachments.append(str(item))
+        elif target == "fixable":
+            fixable.append(str(item))
+        else:
+            missing.append(str(item))
+
+    for item in analysis.get("checklist", []):
+        title = fold_tr(str(item.get("title", "")))
+        status = fold_tr(str(item.get("status", "")))
+        recommendation = str(item.get("recommendation", "")).strip()
+
+        if ("ek" in title or "delil" in title) and status == "eksik" and evidence.get("ekler_deliller"):
+            item["status"] = "düzeltilmeli"
+            item["explanation"] = (
+                f"{item.get('explanation', '')} Delil/ek bilgisi metinde bulunduğu için bu husus kritik eksik değil, biçimsel tamamlama olarak değerlendirildi."
+            ).strip()
+            if recommendation:
+                attachments.append(recommendation)
+
+        if ("husumet" in title or "yetki" in title) and status == "riskli":
+            if evidence.get("davali") and evidence.get("mahkemeye_hitap"):
+                item["status"] = "düzeltilmeli"
+                item["explanation"] = (
+                    f"{item.get('explanation', '')} Açık çelişki tespit edilmediği için bu husus kritik risk değil, dosya ekiyle teyit edilmesi gereken nokta olarak sınıflandırıldı."
+                ).strip()
+                if recommendation:
+                    fixable.append(recommendation)
+
+    analysis["missingInformation"] = unique_keep_order(missing)
+    analysis["fixableIssues"] = unique_keep_order(fixable)
+    analysis["attachmentIssues"] = unique_keep_order(attachments)
+
+    missing_count = sum(1 for item in analysis.get("checklist", []) if fold_tr(str(item.get("status", ""))) in {"eksik", "riskli"})
+    if missing_count == 0 and analysis.get("verdict") != "Geçer":
+        analysis["verdict"] = "Geçer"
+    elif missing_count <= 2 and analysis.get("verdict") == "Geçmez":
+        analysis["verdict"] = "Riskli"
+
+    return analysis
+
+
+def classify_issue_text(value: str) -> str:
+    text = fold_tr(value)
+    if "dava açılış tarihi" in text:
+        return "drop"
+    if any(token in text for token in ["ek", "tebliğ belgesi", "vekaletname", "vekâletname", "belge", "dosya"]):
+        return "attachment"
+    if any(token in text for token in ["başlık", "ayrı liste", "numaralandır", "tarih", "imza"]):
+        return "fixable"
+    return "missing"
+
+
+def unique_keep_order(values: list[str]) -> list[str]:
+    seen = set()
+    result = []
+    for value in values:
+        cleaned = value.strip()
+        if not cleaned:
+            continue
+        key = fold_tr(cleaned)
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(cleaned)
+    return result
 
 
 def find_requirement(item: dict, requirements: dict[str, tuple[str, str]]) -> tuple[str, str] | None:
