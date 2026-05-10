@@ -8,6 +8,7 @@ const summaryTextEl = document.querySelector("#summaryText");
 const verdictBadgeEl = document.querySelector("#verdictBadge");
 const scoreValueEl = document.querySelector("#scoreValue");
 const scoreBarEl = document.querySelector("#scoreBar");
+const resultNoticeEl = document.querySelector("#resultNotice");
 const caseTypeValueEl = document.querySelector("#caseTypeValue");
 const criticalValueEl = document.querySelector("#criticalValue");
 const fixableValueEl = document.querySelector("#fixableValue");
@@ -244,6 +245,8 @@ clearBtn.addEventListener("click", () => {
   lastAnalysis = null;
   lastAiAnalysis = null;
   summaryTextEl.textContent = "Henüz analiz yapılmadı.";
+  resultNoticeEl.textContent = "Analiz tamamlandığında kısa sonuç ve yapılması gerekenler burada gösterilecek.";
+  resultNoticeEl.className = "result-notice neutral";
   verdictBadgeEl.textContent = "Bekliyor";
   verdictBadgeEl.className = "badge neutral";
   scoreValueEl.textContent = "0%";
@@ -370,7 +373,10 @@ function renderAnalysis(analysis) {
   scoreValueEl.textContent = `${analysis.score}%`;
   scoreBarEl.value = analysis.score;
 
-  summaryTextEl.textContent = `${analysis.caseTypeLabel} için ${analysis.items.length} unsur kontrol edildi. Eksik/riskli unsur sayısı: ${analysis.missingCount}.`;
+  const criticalCount = analysis.items.filter((item) => ["eksik", "riskli"].includes(item.rawStatus || "") || (!item.rawStatus && item.status !== "ok")).length;
+  const fixableCount = analysis.items.filter((item) => (item.rawStatus || "") === "düzeltilmeli").length;
+  summaryTextEl.textContent = `${analysis.caseTypeLabel} için ${analysis.items.length} unsur kontrol edildi. Kritik eksik/riskli unsur: ${criticalCount}. Düzeltilmesi önerilen unsur: ${fixableCount}.`;
+  renderResultNotice(analysis, criticalCount, fixableCount);
 
   checklistEl.className = "checklist";
   checklistEl.innerHTML = "";
@@ -453,6 +459,26 @@ function renderAiPanels(ai) {
     ai.attachmentIssues?.length ? ai.attachmentIssues : ["Ek/dosya kontrolü için ayrıca uyarı bildirilmedi."],
   );
   renderDetailTable(checklist);
+}
+
+function renderResultNotice(analysis, criticalCount, fixableCount) {
+  const tone = analysis.verdict === "Geçer" ? "good" : analysis.verdict === "Geçmez" ? "bad" : "warn";
+  resultNoticeEl.className = `result-notice ${tone}`;
+
+  if (analysis.verdict === "Geçer") {
+    resultNoticeEl.textContent =
+      fixableCount > 0
+        ? `Bu dilekçe ön inceleme bakımından geçirilebilir görünüyor. ${fixableCount} biçimsel/tamamlanabilir nokta düzeltilirse dosya daha düzenli hale gelir.`
+        : "Bu dilekçe ön inceleme bakımından geçirilebilir görünüyor. Kritik bir eksik tespit edilmedi.";
+    return;
+  }
+
+  if (analysis.verdict === "Geçmez") {
+    resultNoticeEl.textContent = `Bu dilekçe ön inceleme bakımından ciddi risk taşıyor. ${criticalCount} kritik eksik/riskli unsur giderilmeden sunulması önerilmez.`;
+    return;
+  }
+
+  resultNoticeEl.textContent = `Bu dilekçede ön inceleme bakımından riskli noktalar var. ${criticalCount} kritik/riskli unsur ve ${fixableCount} tamamlanabilir unsur kontrol edilmelidir.`;
 }
 
 function uniqueTextList(values) {
@@ -576,6 +602,9 @@ ${fixableInfo || "-"}
 
 Ek/dosya kontrolü:
 ${attachmentInfo || "-"}
+
+Kullanım notu:
+Bu rapor ön inceleme desteği sağlar; nihai hukuki değerlendirme ve dava stratejisi somut dosya üzerinden ayrıca incelenmelidir.
 
 Uygun hale getirilmiş dilekçe taslağı:
 ${ai.revisedPetition || "[Taslak üretilemedi.]"}

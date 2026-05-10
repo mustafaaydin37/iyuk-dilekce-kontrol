@@ -77,9 +77,11 @@ OPENAI_MODEL=gpt-5.4-mini
 - Dava türünü otomatik tespit etme
 - İYUK m.3 kontrol listesi
 - Eksik unsur bildirimi
+- Kısa sonuç kutusu ve yapılması gerekenler özeti
 - Uygun hale getirilmiş taslak üretimi
 - Metin indirme
 - Word ve PDF rapor çıktısı
+- Gizlilik ve hukuki uyarı metni
 
 ## Üretim sürümünde eklenecekler
 

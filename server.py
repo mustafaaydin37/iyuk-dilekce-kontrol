@@ -181,6 +181,12 @@ def build_docx_export(payload: dict) -> bytes:
     add_docx_list(document, "Düzeltilebilir Noktalar", analysis.get("fixableIssues") or ["Biçimsel düzeltme önerisi bildirilmedi."])
     add_docx_list(document, "Ek/Dosya Kontrolü", analysis.get("attachmentIssues") or ["Ek/dosya kontrolü için ayrıca uyarı bildirilmedi."])
 
+    document.add_heading("Kullanım Notu", level=1)
+    add_docx_paragraphs(
+        document,
+        "Bu rapor ön inceleme desteği sağlar; nihai hukuki değerlendirme ve dava stratejisi somut dosya üzerinden ayrıca incelenmelidir.",
+    )
+
     document.add_heading("Detaylı Kontrol Tablosu", level=1)
     checklist = analysis.get("checklist") or []
     if checklist:
@@ -269,6 +275,12 @@ def build_pdf_export(payload: dict) -> bytes:
     add_pdf_list(story, styles, "Eksik Bilgiler", analysis.get("missingInformation") or ["Eksik gerçek bilgi bildirilmedi."])
     add_pdf_list(story, styles, "Düzeltilebilir Noktalar", analysis.get("fixableIssues") or ["Biçimsel düzeltme önerisi bildirilmedi."])
     add_pdf_list(story, styles, "Ek/Dosya Kontrolü", analysis.get("attachmentIssues") or ["Ek/dosya kontrolü için ayrıca uyarı bildirilmedi."])
+    add_pdf_section(
+        story,
+        styles,
+        "Kullanım Notu",
+        "Bu rapor ön inceleme desteği sağlar; nihai hukuki değerlendirme ve dava stratejisi somut dosya üzerinden ayrıca incelenmelidir.",
+    )
 
     checklist = analysis.get("checklist") or []
     story.append(Paragraph("Detaylı Kontrol Tablosu", styles["Heading1"]))
