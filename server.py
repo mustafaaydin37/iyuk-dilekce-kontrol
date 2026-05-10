@@ -378,6 +378,9 @@ def merge_item(model_item: dict | None, mechanical: dict) -> dict:
     mechanical_status = fold_tr(mechanical["status"])
     final = mechanical.copy()
 
+    if mechanical_status in {"eksik", "riskli", "düzeltilmeli"}:
+        return final
+
     if mechanical_status == "uygun" and model_status in {"riskli", "eksik", "düzeltilmeli"}:
         final["status"] = "düzeltilmeli" if model_status == "düzeltilmeli" else "riskli"
         final["explanation"] = model_item.get("explanation") or final["explanation"]
@@ -455,19 +458,8 @@ def mechanical_item(check_id: str, title: str, evidence: dict) -> dict:
 
 def normalize_issue_categories(analysis: dict, evidence: dict) -> dict:
     missing = []
-    fixable = list(analysis.get("fixableIssues", []))
-    attachments = list(analysis.get("attachmentIssues", []))
-
-    for item in analysis.get("missingInformation", []):
-        target = classify_issue_text(str(item))
-        if target == "drop":
-            continue
-        if target == "attachment":
-            attachments.append(str(item))
-        elif target == "fixable":
-            fixable.append(str(item))
-        else:
-            missing.append(str(item))
+    fixable = []
+    attachments = []
 
     for item in analysis.get("checklist", []):
         title = fold_tr(str(item.get("title", "")))
@@ -491,6 +483,29 @@ def normalize_issue_categories(analysis: dict, evidence: dict) -> dict:
                 if recommendation:
                     fixable.append(recommendation)
 
+        if status in {"eksik", "riskli"} and item.get("id") in {
+            "mahkeme",
+            "davaci",
+            "davali",
+            "dava_konusu",
+            "teblig",
+            "sonuc_istem",
+            "yd_ibaresi",
+        }:
+            missing.append(f"{item.get('title')}: {item.get('recommendation')}")
+
+        if status == "düzeltilmeli":
+            fixable.append(f"{item.get('title')}: {item.get('recommendation')}")
+
+    if evidence.get("vekil"):
+        attachments.append("Vekaletname dosyada bulunmalı.")
+    if evidence.get("teblig_ogrenme_tarihi"):
+        attachments.append("Tebliğ/öğrenme belgesi dosyada bulunmalı.")
+    if evidence.get("konu") or evidence.get("islem_gorunumu"):
+        attachments.append("Dava konusu işlem örneği dosyada bulunmalı.")
+    if evidence.get("deliller") and not evidence.get("ekler"):
+        fixable.append("Ekler ve dosya belgeleri: Ayrı EKLER başlığı açılıp belgeler numaralandırılmalıdır.")
+
     analysis["missingInformation"] = unique_keep_order(missing)
     analysis["fixableIssues"] = unique_keep_order(fixable)
     analysis["attachmentIssues"] = unique_keep_order(attachments)
@@ -502,17 +517,6 @@ def normalize_issue_categories(analysis: dict, evidence: dict) -> dict:
         analysis["verdict"] = "Riskli"
 
     return analysis
-
-
-def classify_issue_text(value: str) -> str:
-    text = fold_tr(value)
-    if "dava açılış tarihi" in text:
-        return "drop"
-    if any(token in text for token in ["ek", "tebliğ belgesi", "vekaletname", "vekâletname", "belge", "dosya"]):
-        return "attachment"
-    if any(token in text for token in ["başlık", "ayrı liste", "numaralandır", "tarih", "imza"]):
-        return "fixable"
-    return "missing"
 
 
 def unique_keep_order(values: list[str]) -> list[str]:
