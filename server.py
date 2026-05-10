@@ -257,12 +257,12 @@ def enforce_mechanical_findings(analysis: dict, evidence: dict) -> dict:
     }
 
     for item in checklist:
-        status = str(item.get("status", "")).casefold()
+        status = fold_tr(str(item.get("status", "")))
         item_evidence = str(item.get("evidence", "")).strip()
         if status != "uygun":
             continue
 
-        if not item_evidence or item_evidence.casefold() in {"-", "yok", "bulunamadı"}:
+        if not item_evidence or fold_tr(item_evidence) in {"-", "yok", "bulunamadı"}:
             downgrade_item(item, "Uygunluk dayanağı gösterilmediği için bu unsur riskli kabul edildi.")
             continue
 
@@ -272,7 +272,7 @@ def enforce_mechanical_findings(analysis: dict, evidence: dict) -> dict:
             if not evidence_value_present(evidence_key, evidence):
                 downgrade_item(item, note)
 
-    missing_count = sum(1 for item in checklist if str(item.get("status", "")).casefold() != "uygun")
+    missing_count = sum(1 for item in checklist if fold_tr(str(item.get("status", ""))) != "uygun")
     if checklist:
         recalculated = round(((len(checklist) - missing_count) / len(checklist)) * 100)
         current_score = int(analysis.get("score", recalculated))
@@ -287,7 +287,11 @@ def enforce_mechanical_findings(analysis: dict, evidence: dict) -> dict:
 
 
 def find_requirement(item: dict, requirements: dict[str, tuple[str, str]]) -> tuple[str, str] | None:
-    text = f"{item.get('id', '')} {item.get('title', '')}".casefold()
+    text = fold_tr(f"{item.get('id', '')} {item.get('title', '')}")
+    if "davacı" in text and ("adres" in text or "kimlik" in text or "tc" in text or "t.c" in text):
+        return ("davacı_kimlik_adres", "Davacı kimlik/adres bilgisi mekanik kontrolde birlikte tespit edilemedi.")
+    if "davacı" in text and "adres" in text:
+        return ("davacı_adresi_olabilir", "Davacı adresi mekanik kontrolde tespit edilemedi.")
     for keyword, requirement in requirements.items():
         if keyword in text:
             return requirement
@@ -295,6 +299,8 @@ def find_requirement(item: dict, requirements: dict[str, tuple[str, str]]) -> tu
 
 
 def evidence_value_present(key: str, evidence: dict) -> bool:
+    if key == "davacı_kimlik_adres":
+        return bool(evidence.get("davacı")) and bool(evidence.get("davacı_kimlik_no")) and bool(evidence.get("davacı_adresi_olabilir"))
     value = str(evidence.get(key, "")).strip()
     return bool(value)
 
@@ -306,18 +312,21 @@ def downgrade_item(item: dict, note: str) -> None:
 
 
 def extract_local_evidence(petition_text: str) -> dict:
+    sections = extract_sections(petition_text)
     text = re.sub(r"\s+", " ", petition_text).strip()
+    plaintiff_section = sections.get("davacı") or find_labeled_excerpt(text, "davacı", ["vekili", "davalı", "konu"])
     return {
-        "mahkemeye_hitap": find_excerpt(text, r"(danıştay|idare mahkemesi|vergi mahkemesi).{0,90}başkanlığı'?na"),
-        "davacı": find_labeled_excerpt(text, "davacı"),
-        "davacı_adresi_olabilir": find_excerpt(text, r"(adres|mahallesi|mah\.|sokak|cadde|cad\.|no\s*:|/\s*[A-ZÇĞİÖŞÜa-zçğıöşü]+)"),
-        "davali": find_labeled_excerpt(text, "davalı"),
-        "konu": find_labeled_excerpt(text, "konu"),
-        "teblig_ogrenme_tarihi": find_excerpt(text, r"(tebellüğ|tebliğ|öğrenme|bildirim).{0,80}\d{1,2}[./]\d{1,2}[./]\d{4}"),
+        "mahkemeye_hitap": sections.get("mahkeme") or find_excerpt(text, r"(danıştay|idare mahkemesi|vergi mahkemesi).{0,110}(başkanlığı'?na|dairesi'?ne)"),
+        "davacı": plaintiff_section,
+        "davacı_kimlik_no": find_excerpt(plaintiff_section, r"(t\.?\s*c\.?\s*)?(kimlik\s*)?(no|numarası)?\s*:?\s*[1-9][0-9]{10}"),
+        "davacı_adresi_olabilir": find_excerpt(plaintiff_section, r"(adres\s*:|mahallesi|mah\.|sokak|sok\.|cadde|cad\.|bulvar|bulv\.|no\s*:|daire|d\s*:|/\s*[A-ZÇĞİÖŞÜa-zçğıöşü]+)"),
+        "davali": sections.get("davalı") or find_labeled_excerpt(text, "davalı", ["konu", "tebellüğ", "tebliğ", "açıklamalar"]),
+        "konu": sections.get("konu") or find_labeled_excerpt(text, "konu", ["tebellüğ", "tebliğ", "açıklamalar", "olaylar"]),
+        "teblig_ogrenme_tarihi": sections.get("tebliğ") or find_excerpt(text, r"(tebellüğ|tebliğ|öğrenme|bildirim).{0,80}\d{1,2}[./]\d{1,2}[./]\d{4}"),
         "tazminat_miktari": find_excerpt(text, r"\d[\d.,]*\s*(tl|₺|türk lirası)"),
         "yd_ibaresi": find_excerpt(text, r"YÜRÜTMENİN\s+DURDURULMASI\s+TALEPLİDİR|yürütmenin\s+durdurulması"),
-        "sonuc_istem": find_excerpt(text, r"(sonuç|netice).{0,20}(talep|istem)"),
-        "ekler_deliller": find_excerpt(text, r"(ekler|deliller|ek\s*:)"),
+        "sonuc_istem": sections.get("sonuç") or find_excerpt(text, r"(sonuç|netice).{0,30}(talep|istem)"),
+        "ekler_deliller": sections.get("ekler") or find_excerpt(text, r"(ekler|deliller|ek\s*:)"),
         "imza_tarih": find_excerpt(text[-900:], r"\d{1,2}[./]\d{1,2}[./]\d{4}.{0,180}(davacı|vekili|av\.)"),
     }
 
@@ -331,18 +340,93 @@ def find_excerpt(text: str, pattern: str) -> str:
     return text[start:end].strip()
 
 
-def find_labeled_excerpt(text: str, label: str) -> str:
-    match = re.search(rf"{label}\s*:", text, flags=re.IGNORECASE)
+def find_labeled_excerpt(text: str, label: str, stop_labels: list[str] | None = None) -> str:
+    match = re.search(
+        rf"(?:^|\s){label}\s*:?(?=\s|$)",
+        text,
+        flags=re.IGNORECASE,
+    )
     if not match:
         return ""
     start = match.start()
+    stops = stop_labels or ["vekili", "davalı", "konu", "tebellüğ", "tebliğ", "açıklamalar", "hukuki sebepler", "sonuç"]
+    stop_pattern = "|".join(re.escape(stop) for stop in stops)
     next_label = re.search(
-        r"\b(vekili|davalı|konu|tebellüğ|tebliğ|açıklamalar|hukuki sebepler|sonuç)\s*:",
+        rf"\b({stop_pattern})\s*:?(?=\s|$)",
         text[match.end() :],
         flags=re.IGNORECASE,
     )
     end = match.end() + next_label.start() if next_label else min(len(text), start + 450)
     return text[start:end].strip()
+
+
+def extract_sections(petition_text: str) -> dict[str, str]:
+    lines = [line.strip() for line in petition_text.replace("\r", "\n").split("\n")]
+    lines = [line for line in lines if line]
+    sections: dict[str, list[str]] = {}
+    current_key = "mahkeme"
+    sections[current_key] = []
+
+    for line in lines:
+        heading = detect_heading(line)
+        if heading:
+            current_key = heading
+            sections.setdefault(current_key, [])
+            remainder = strip_heading(line, heading)
+            if remainder:
+                sections[current_key].append(remainder)
+            continue
+        sections.setdefault(current_key, []).append(line)
+
+    return {key: " ".join(value).strip() for key, value in sections.items() if " ".join(value).strip()}
+
+
+def detect_heading(line: str) -> str | None:
+    cleaned = normalize_heading(line)
+    aliases = {
+        "davacı": ["davacı", "davacı bilgileri", "davacı taraf", "davacılar"],
+        "vekili": ["vekili", "davacı vekili", "vekil", "vekiller"],
+        "davalı": ["davalı", "davalı idare", "davalı taraf", "davalılar"],
+        "konu": ["konu", "dava konusu", "davanın konusu"],
+        "açıklamalar": ["açıklamalar", "olaylar", "izahlar", "maddi olaylar"],
+        "hukuki sebepler": ["hukuki sebepler", "hukuki nedenler", "yasal sebepler"],
+        "tebliğ": ["tebellüğ tarihi", "tebliğ tarihi", "öğrenme tarihi", "bildirim tarihi"],
+        "sonuç": ["sonuç ve talep", "sonuç ve istem", "netice ve talep", "sonuç", "istem"],
+        "ekler": ["ekler", "deliller", "ek", "ekler ve deliller"],
+    }
+    for key, names in aliases.items():
+        for name in names:
+            if cleaned == name or re.match(rf"^{re.escape(name)}\s*:", cleaned):
+                return key
+    return None
+
+
+def strip_heading(line: str, heading: str) -> str:
+    aliases = {
+        "davacı": r"davacı(?:lar| bilgileri| taraf)?",
+        "vekili": r"(?:davacı\s+)?vekil(?:i|ler)?",
+        "davalı": r"davalı(?:lar| idare| taraf)?",
+        "konu": r"(?:dava(?:nın)?\s+)?konu(?:su)?",
+        "açıklamalar": r"açıklamalar|olaylar|izahlar|maddi olaylar",
+        "hukuki sebepler": r"hukuki sebepler|hukuki nedenler|yasal sebepler",
+        "tebliğ": r"tebellüğ tarihi|tebliğ tarihi|öğrenme tarihi|bildirim tarihi",
+        "sonuç": r"sonuç\s+ve\s+(?:talep|istem)|netice\s+ve\s+talep|sonuç|istem",
+        "ekler": r"ekler\s+ve\s+deliller|ekler|deliller|ek",
+    }
+    pattern = aliases.get(heading)
+    if not pattern:
+        return ""
+    return re.sub(rf"^\s*{pattern}\s*:?\s*", "", line, flags=re.IGNORECASE).strip()
+
+
+def normalize_heading(value: str) -> str:
+    value = re.sub(r"[:：]+$", "", value.strip())
+    value = re.sub(r"\s+", " ", value)
+    return fold_tr(value)
+
+
+def fold_tr(value: str) -> str:
+    return value.translate(str.maketrans({"I": "ı", "İ": "i"})).casefold()
 
 
 def parse_multipart_file(content_type: str, body: bytes) -> tuple[str, bytes]:
