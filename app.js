@@ -19,7 +19,8 @@ const draftOutputEl = document.querySelector("#draftOutput");
 const detailTableEl = document.querySelector("#detailTable");
 const buildDraftBtn = document.querySelector("#buildDraftBtn");
 const downloadTxtBtn = document.querySelector("#downloadTxtBtn");
-const printBtn = document.querySelector("#printBtn");
+const downloadDocxBtn = document.querySelector("#downloadDocxBtn");
+const downloadPdfBtn = document.querySelector("#downloadPdfBtn");
 
 let lastAnalysis = null;
 let lastAiAnalysis = null;
@@ -163,7 +164,7 @@ fileEl.addEventListener("change", async () => {
   }
 
   if (!location.origin.startsWith("http")) {
-    fileStatusEl.textContent = `${file.name} seçildi. PDF/DOCX metin çıkarımı için sayfayı yerel sunucudan açın.`;
+    fileStatusEl.textContent = `${file.name} seçildi. Dosya metin çıkarımı için sayfayı yerel sunucudan açın.`;
     draftOutputEl.textContent =
       "PDF/DOCX yükleme için bu dosyanın file:// olarak değil, yerel web sunucusu üzerinden açılması gerekir. Terminalde şu komutla çalıştırılabilir:\n\npython3 server.py\n\nSonra http://127.0.0.1:8765 adresinden deneyin.";
     return;
@@ -286,7 +287,42 @@ downloadTxtBtn.addEventListener("click", () => {
   URL.revokeObjectURL(link.href);
 });
 
-printBtn.addEventListener("click", () => window.print());
+downloadDocxBtn.addEventListener("click", () => exportDocument("docx"));
+downloadPdfBtn.addEventListener("click", () => exportDocument("pdf"));
+
+async function exportDocument(format) {
+  if (!lastAiAnalysis) {
+    analysisOutputEl.textContent = "Dosya indirmek için önce dilekçeyi analiz edin.";
+    return;
+  }
+
+  const payload = {
+    format,
+    report: analysisOutputEl.textContent,
+    draft: draftOutputEl.textContent,
+    analysis: lastAiAnalysis,
+  };
+
+  try {
+    const response = await fetch(`/export-${format}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) {
+      const result = await response.json().catch(() => ({}));
+      throw new Error(result.error || "Dosya üretilemedi.");
+    }
+    const blob = await response.blob();
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = format === "pdf" ? "idari-dava-dilekce-raporu.pdf" : "idari-dava-dilekce-raporu.docx";
+    link.click();
+    URL.revokeObjectURL(link.href);
+  } catch (error) {
+    analysisOutputEl.textContent = `Dosya indirme hatası: ${error.message}`;
+  }
+}
 
 function analyzePetition(rawText, caseType) {
   const text = normalize(rawText);

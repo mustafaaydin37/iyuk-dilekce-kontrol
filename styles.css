@@ -518,6 +518,27 @@ progress::-webkit-progress-value {
   line-height: 1.45;
 }
 
+.privacy-note {
+  margin-top: 18px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfb;
+  color: var(--muted);
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.privacy-note strong {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--ink);
+}
+
+.privacy-note p {
+  margin: 0;
+}
+
 @media (max-width: 900px) {
   .intro,
   .workspace,

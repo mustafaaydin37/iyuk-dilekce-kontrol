@@ -6,6 +6,7 @@ import os
 import re
 import urllib.error
 import urllib.request
+from html import escape
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from io import BytesIO
 from pathlib import Path
@@ -44,6 +45,14 @@ class PetitionHandler(SimpleHTTPRequestHandler):
     def do_POST(self):
         if self.path == "/ai-analyze":
             self.handle_ai_analyze()
+            return
+
+        if self.path == "/export-docx":
+            self.handle_export_docx()
+            return
+
+        if self.path == "/export-pdf":
+            self.handle_export_pdf()
             return
 
         if self.path != "/extract":
@@ -91,10 +100,42 @@ class PetitionHandler(SimpleHTTPRequestHandler):
         except Exception as exc:
             self.send_json({"error": f"OpenAI analizi çalıştırılamadı: {exc}"}, status=500)
 
+    def handle_export_docx(self):
+        try:
+            payload = self.read_json_payload()
+            body = build_docx_export(payload)
+            self.send_binary(
+                body,
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                "idari-dava-dilekce-raporu.docx",
+            )
+        except Exception as exc:
+            self.send_json({"error": f"Word dosyası üretilemedi: {exc}"}, status=500)
+
+    def handle_export_pdf(self):
+        try:
+            payload = self.read_json_payload()
+            body = build_pdf_export(payload)
+            self.send_binary(body, "application/pdf", "idari-dava-dilekce-raporu.pdf")
+        except Exception as exc:
+            self.send_json({"error": f"PDF dosyası üretilemedi: {exc}"}, status=500)
+
+    def read_json_payload(self):
+        length = int(self.headers.get("Content-Length", "0"))
+        return json.loads(self.rfile.read(length).decode("utf-8"))
+
     def send_json(self, payload, status=200):
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def send_binary(self, body: bytes, content_type: str, filename: str):
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -115,6 +156,192 @@ def extract_text(filename: str, data: bytes) -> str:
         return data.decode("utf-8", errors="replace")
 
     raise ValueError("Yalnızca PDF, DOCX ve TXT dosyaları desteklenir.")
+
+
+def build_docx_export(payload: dict) -> bytes:
+    analysis = payload.get("analysis") or {}
+    draft = clean_export_text(payload.get("draft") or analysis.get("revisedPetition") or "")
+    document = Document()
+    document.add_heading("İdari Dava Dilekçesi Ön İnceleme Raporu", 0)
+
+    add_docx_key_values(
+        document,
+        [
+            ("Sonuç", analysis.get("verdict", "-")),
+            ("Uygunluk puanı", f"{analysis.get('score', '-')}%"),
+            ("Tespit edilen dava türü", analysis.get("detectedCaseType", "-")),
+            ("Tespit gerekçesi", analysis.get("detectedCaseTypeReason", "-")),
+        ],
+    )
+
+    document.add_heading("Kısa Değerlendirme", level=1)
+    add_docx_paragraphs(document, analysis.get("summary") or "-")
+
+    add_docx_list(document, "Eksik Bilgiler", analysis.get("missingInformation") or ["Eksik gerçek bilgi bildirilmedi."])
+    add_docx_list(document, "Düzeltilebilir Noktalar", analysis.get("fixableIssues") or ["Biçimsel düzeltme önerisi bildirilmedi."])
+    add_docx_list(document, "Ek/Dosya Kontrolü", analysis.get("attachmentIssues") or ["Ek/dosya kontrolü için ayrıca uyarı bildirilmedi."])
+
+    document.add_heading("Detaylı Kontrol Tablosu", level=1)
+    checklist = analysis.get("checklist") or []
+    if checklist:
+        table = document.add_table(rows=1, cols=4)
+        table.style = "Table Grid"
+        headers = ["Durum", "Unsur", "Dayanak", "Öneri"]
+        for index, header in enumerate(headers):
+            table.rows[0].cells[index].text = header
+        for item in checklist:
+            cells = table.add_row().cells
+            cells[0].text = clean_export_text(item.get("status") or "-")
+            cells[1].text = clean_export_text(item.get("title") or "-")
+            cells[2].text = clean_export_text(item.get("evidence") or "-")
+            cells[3].text = clean_export_text(item.get("recommendation") or item.get("explanation") or "-")
+    else:
+        document.add_paragraph("Kontrol tablosu oluşturulamadı.")
+
+    document.add_heading("Düzeltilmiş Taslak", level=1)
+    add_docx_paragraphs(document, draft or "[Taslak üretilemedi.]")
+
+    output = BytesIO()
+    document.save(output)
+    return output.getvalue()
+
+
+def add_docx_key_values(document: Document, values: list[tuple[str, object]]) -> None:
+    for key, value in values:
+        paragraph = document.add_paragraph()
+        paragraph.add_run(f"{key}: ").bold = True
+        paragraph.add_run(clean_export_text(value))
+
+
+def add_docx_list(document: Document, title: str, values: list[str]) -> None:
+    document.add_heading(title, level=1)
+    for value in values:
+        document.add_paragraph(clean_export_text(value), style="List Bullet")
+
+
+def add_docx_paragraphs(document: Document, text: object) -> None:
+    parts = split_export_paragraphs(clean_export_text(text))
+    for part in parts or ["-"]:
+        document.add_paragraph(part)
+
+
+def build_pdf_export(payload: dict) -> bytes:
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+    from reportlab.lib import colors
+    from reportlab.lib.units import cm
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+
+    font_name = register_pdf_font(pdfmetrics, TTFont)
+    styles = getSampleStyleSheet()
+    for style_name in ["Title", "Heading1", "Heading2", "Normal", "BodyText"]:
+        styles[style_name].fontName = font_name
+    styles["Normal"].fontSize = 9
+    styles["Normal"].leading = 12
+
+    analysis = payload.get("analysis") or {}
+    draft = clean_export_text(payload.get("draft") or analysis.get("revisedPetition") or "")
+    output = BytesIO()
+    document = SimpleDocTemplate(
+        output,
+        pagesize=A4,
+        rightMargin=1.4 * cm,
+        leftMargin=1.4 * cm,
+        topMargin=1.4 * cm,
+        bottomMargin=1.4 * cm,
+    )
+    story = []
+
+    story.append(Paragraph("İdari Dava Dilekçesi Ön İnceleme Raporu", styles["Title"]))
+    story.append(Spacer(1, 10))
+    for key, value in [
+        ("Sonuç", analysis.get("verdict", "-")),
+        ("Uygunluk puanı", f"{analysis.get('score', '-')}%"),
+        ("Tespit edilen dava türü", analysis.get("detectedCaseType", "-")),
+        ("Tespit gerekçesi", analysis.get("detectedCaseTypeReason", "-")),
+    ]:
+        story.append(Paragraph(f"<b>{escape(key)}:</b> {escape(clean_export_text(value))}", styles["Normal"]))
+    story.append(Spacer(1, 10))
+
+    add_pdf_section(story, styles, "Kısa Değerlendirme", analysis.get("summary") or "-")
+    add_pdf_list(story, styles, "Eksik Bilgiler", analysis.get("missingInformation") or ["Eksik gerçek bilgi bildirilmedi."])
+    add_pdf_list(story, styles, "Düzeltilebilir Noktalar", analysis.get("fixableIssues") or ["Biçimsel düzeltme önerisi bildirilmedi."])
+    add_pdf_list(story, styles, "Ek/Dosya Kontrolü", analysis.get("attachmentIssues") or ["Ek/dosya kontrolü için ayrıca uyarı bildirilmedi."])
+
+    checklist = analysis.get("checklist") or []
+    story.append(Paragraph("Detaylı Kontrol Tablosu", styles["Heading1"]))
+    if checklist:
+        data = [["Durum", "Unsur", "Dayanak", "Öneri"]]
+        for item in checklist:
+            data.append([
+                clean_export_text(item.get("status") or "-"),
+                clean_export_text(item.get("title") or "-"),
+                clean_export_text(item.get("evidence") or "-"),
+                clean_export_text(item.get("recommendation") or item.get("explanation") or "-"),
+            ])
+        table = Table(data, colWidths=[2.0 * cm, 3.6 * cm, 5.0 * cm, 5.2 * cm], repeatRows=1)
+        table.setStyle(TableStyle([
+            ("FONTNAME", (0, 0), (-1, -1), font_name),
+            ("FONTSIZE", (0, 0), (-1, -1), 7),
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#E8EEF8")),
+            ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#B7C3D6")),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 4),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+        ]))
+        story.append(table)
+    else:
+        story.append(Paragraph("Kontrol tablosu oluşturulamadı.", styles["Normal"]))
+
+    story.append(Spacer(1, 12))
+    add_pdf_section(story, styles, "Düzeltilmiş Taslak", draft or "[Taslak üretilemedi.]")
+
+    document.build(story)
+    return output.getvalue()
+
+
+def register_pdf_font(pdfmetrics, TTFont) -> str:
+    candidates = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+        "/System/Library/Fonts/Supplemental/Arial.ttf",
+        "/Library/Fonts/Arial Unicode.ttf",
+    ]
+    for candidate in candidates:
+        if Path(candidate).exists():
+            pdfmetrics.registerFont(TTFont("AppFont", candidate))
+            return "AppFont"
+    return "Helvetica"
+
+
+def add_pdf_section(story: list, styles, title: str, text: object) -> None:
+    from reportlab.platypus import Paragraph, Spacer
+
+    story.append(Paragraph(escape(title), styles["Heading1"]))
+    for paragraph in split_export_paragraphs(clean_export_text(text)) or ["-"]:
+        story.append(Paragraph(escape(paragraph), styles["Normal"]))
+        story.append(Spacer(1, 4))
+
+
+def add_pdf_list(story: list, styles, title: str, values: list[str]) -> None:
+    from reportlab.platypus import Paragraph, Spacer
+
+    story.append(Paragraph(escape(title), styles["Heading1"]))
+    for value in values:
+        story.append(Paragraph(f"• {escape(clean_export_text(value))}", styles["Normal"]))
+    story.append(Spacer(1, 8))
+
+
+def clean_export_text(value: object) -> str:
+    return re.sub(r"[ \t]+", " ", str(value or "")).strip()
+
+
+def split_export_paragraphs(text: str) -> list[str]:
+    text = text.replace("\r", "\n")
+    return [part.strip() for part in re.split(r"\n{2,}|\n", text) if part.strip()]
+
 
 class MissingOpenAIKeyError(RuntimeError):
     pass

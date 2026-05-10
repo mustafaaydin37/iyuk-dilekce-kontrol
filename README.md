@@ -70,7 +70,7 @@ OPENAI_API_KEY=sk-...
 OPENAI_MODEL=gpt-5.4-mini
 ```
 
-## İlk sürüm kapsamı
+## Mevcut kapsam
 
 - Dilekçe metni yapıştırma
 - PDF/DOCX/TXT dosya yükleme ve metin çıkarımı
@@ -79,11 +79,9 @@ OPENAI_MODEL=gpt-5.4-mini
 - Eksik unsur bildirimi
 - Uygun hale getirilmiş taslak üretimi
 - Metin indirme
-- Tarayıcı yazdırma üzerinden PDF çıktısı
+- Word ve PDF rapor çıktısı
 
 ## Üretim sürümünde eklenecekler
 
-- Word ve PDF dosyası üretimi
-- OpenAI API ile derin hukuki kontrol
 - Kullanıcı hesapları ve kayıtlı analiz geçmişi
 - Dava türüne göre daha ayrıntılı özel kontrol kuralları
