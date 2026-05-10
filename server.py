@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import re
@@ -18,7 +17,6 @@ from pypdf import PdfReader
 ROOT = Path(__file__).resolve().parent
 HOST = "127.0.0.1"
 PORT = 8765
-ANALYSIS_CACHE: dict[str, dict] = {}
 
 
 class PetitionHandler(SimpleHTTPRequestHandler):
@@ -65,11 +63,7 @@ class PetitionHandler(SimpleHTTPRequestHandler):
                 self.send_json({"error": "Dilekçe metni boş."}, status=400)
                 return
 
-            cache_key = build_analysis_cache_key(petition_text)
-            analysis = ANALYSIS_CACHE.get(cache_key)
-            if analysis is None:
-                analysis = analyze_with_openai(petition_text)
-                ANALYSIS_CACHE[cache_key] = analysis
+            analysis = analyze_with_openai(petition_text)
             self.send_json({"analysis": analysis})
         except MissingOpenAIKeyError as exc:
             self.send_json({"error": str(exc)}, status=503)
@@ -185,7 +179,8 @@ def analyze_with_openai(petition_text: str) -> dict:
         data = json.loads(response.read().decode("utf-8"))
 
     output_text = extract_response_text(data)
-    return json.loads(output_text)
+    analysis = json.loads(output_text)
+    return verify_analysis_against_text(analysis, petition_text)
 
 
 def build_legal_prompt(petition_text: str, evidence: dict) -> str:
@@ -203,9 +198,11 @@ Görev:
 - Düzeltilebilen anlatım, başlık, konu, sonuç ve istem bölümlerini uygun dilekçe formuna getir.
 - Yürütmenin durdurulması talepli olduğu sonucuna varırsan ilgili ibareyi büyük harfli ve belirgin şekilde taslağa ekle.
 - Her kontrol maddesinde kararını dilekçedeki somut metin parçasına bağla.
+- Dayanak alanına mümkün olduğunca dilekçeden aynen kısa alıntı yaz. Yorum, özet veya uydurma metin yazma.
 - Bir unsur için “uygun” diyebilmen için dilekçede o unsuru açıkça gösteren bir metin parçası bulunmalıdır.
 - Metinde açık karşılığı yoksa “eksik” veya “riskli” de; tahminle uygun deme.
 - Aynı dilekçe aynı kanıtlarla değerlendirildiğinde aynı sonuca varacak şekilde tutarlı davran.
+- Kendi ilk kararını ayrıca denetle: “uygun” dediğin her maddenin dayanağı gerçekten dilekçede var mı, yoksa durumu riskli/eksik yap.
 - Aşağıdaki yerel kanıt çıkarımını yardımcı veri olarak kullan; ancak nihai kararı dilekçenin tamamına göre ver.
 - Cevabı yalnızca istenen JSON şemasına uygun ver.
 
@@ -233,9 +230,49 @@ def extract_response_text(data: dict) -> str:
     raise ValueError("OpenAI yanıtında metin bulunamadı.")
 
 
-def build_analysis_cache_key(petition_text: str) -> str:
-    normalized = re.sub(r"\s+", " ", petition_text).strip().lower()
-    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+def verify_analysis_against_text(analysis: dict, petition_text: str) -> dict:
+    normalized_petition = normalize_for_match(petition_text)
+    checklist = analysis.get("checklist", [])
+
+    for item in checklist:
+        status = str(item.get("status", "")).casefold()
+        evidence = str(item.get("evidence", "")).strip()
+        if status != "uygun":
+            continue
+
+        if not evidence or evidence in {"-", "yok", "bulunamadı"}:
+            downgrade_item(item, "Uygunluk dayanağı gösterilmediği için bu unsur riskli kabul edildi.")
+            continue
+
+        normalized_evidence = normalize_for_match(evidence)
+        if len(normalized_evidence) >= 16 and normalized_evidence not in normalized_petition:
+            downgrade_item(
+                item,
+                "Gösterilen dayanak dilekçe metninde aynen doğrulanamadığı için bu unsur riskli kabul edildi.",
+            )
+
+    missing_count = sum(1 for item in checklist if str(item.get("status", "")).casefold() != "uygun")
+    if checklist:
+        recalculated = round(((len(checklist) - missing_count) / len(checklist)) * 100)
+        current_score = int(analysis.get("score", recalculated))
+        analysis["score"] = min(current_score, recalculated)
+
+    if missing_count >= max(4, len(checklist) // 3):
+        analysis["verdict"] = "Geçmez"
+    elif missing_count > 0 and analysis.get("verdict") == "Geçer":
+        analysis["verdict"] = "Riskli"
+
+    return analysis
+
+
+def downgrade_item(item: dict, note: str) -> None:
+    item["status"] = "riskli"
+    explanation = str(item.get("explanation", "")).strip()
+    item["explanation"] = f"{explanation} {note}".strip()
+
+
+def normalize_for_match(value: str) -> str:
+    return re.sub(r"\s+", " ", value).strip().casefold()
 
 
 def extract_local_evidence(petition_text: str) -> dict:
