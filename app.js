@@ -471,25 +471,20 @@ function renderAiPanels(ai) {
   const checklist = ai.checklist || [];
   const criticalItems = checklist.filter((item) => ["eksik", "riskli"].includes(normalizeStatus(item.status)));
   const fixableItems = checklist.filter((item) => normalizeStatus(item.status) === "düzeltilmeli");
+  const visibleFixableIssues = uniqueTextList([
+    ...(ai.fixableIssues || []),
+    ...fixableItems.map((item) => `${item.title}: ${item.recommendation || item.explanation}`),
+  ]);
 
   caseTypeValueEl.textContent = ai.detectedCaseType || "-";
   criticalValueEl.textContent = String(criticalItems.length);
-  fixableValueEl.textContent = String(uniqueTextList([
-    ...fixableItems.map((item) => item.title || item.recommendation || item.explanation),
-    ...(ai.fixableIssues || []),
-  ]).length);
+  fixableValueEl.textContent = String(visibleFixableIssues.length);
 
   renderList(missingInfoListEl, ai.missingInformation?.length ? ai.missingInformation : ["Eksik gerçek bilgi bildirilmedi."]);
   renderList(
     fixableListEl,
-    uniqueTextList([
-      ...(ai.fixableIssues || []),
-      ...fixableItems.map((item) => `${item.title}: ${item.recommendation || item.explanation}`),
-    ]).length
-      ? uniqueTextList([
-          ...(ai.fixableIssues || []),
-          ...fixableItems.map((item) => `${item.title}: ${item.recommendation || item.explanation}`),
-        ])
+    visibleFixableIssues.length
+      ? visibleFixableIssues
       : ["Biçimsel düzeltme önerisi bildirilmedi."],
   );
   renderList(
